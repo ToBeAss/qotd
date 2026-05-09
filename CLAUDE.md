@@ -4,15 +4,28 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Project Does
 
-QOTD generates a daily quote using OpenAI's API and posts it to Discord via a webhook. Quotes are generated with a "Quote Dealer" noir persona defined in `system_prompt.py`. A scheduler posts at a random time between 06:00–23:59, with a ~15% chance of a bonus second quote later the same day.
+QOTD generates daily quotes using OpenAI's API and posts them to Discord via a webhook. Quotes come from a small cast of personas defined in `system_prompt.py` — see [Personas](#personas). Each weekday the scheduler delivers 2–3 messages spread across the day, each independently picking a persona by weight.
+
+## Personas
+
+`system_prompt.py` exports a `PERSONAS` dict and a `pick_persona()` weighted-random helper. Each invocation of `main.py` picks one persona (or `--persona <key>` forces one).
+
+| Key | Name | Voice | Weight |
+|---|---|---|---|
+| `dealer` | The Quote Dealer | Noir, dark, mysterious — the canonical voice. | 60% |
+| `plug` | The Quote Plug | Brainrot, lighthearted, chronically online. References 6-7 / 69 occasionally. Opens with a "covering for the Dealer" pre-line. | 25% |
+| `postman` | The Quote Postman | Plain, calm, observational. Universal quotes. Opens with a mild "filling in for the Dealer" pre-line. | 15% |
+
+To rebalance: change the `weight` values in `system_prompt.py`. Weights are integers and don't have to sum to 100.
 
 ## Running the Project
 
 ```bash
 pip install -r requirements.txt
-cp .env.example .env   # then fill in credentials
-python main.py         # send a regular quote immediately
-python main.py --bonus # send a bonus quote with in-character acknowledgement
+cp .env.example .env                              # then fill in credentials
+python main.py                                    # weighted-random persona, posts to Discord
+python main.py --persona plug                     # force a specific persona
+python main.py --persona postman --dry-run        # print to stdout instead of posting (preview)
 ```
 
 **Scheduling on the Pi (cron):**
@@ -23,17 +36,25 @@ crontab -e
 0 6 * * * /path/to/qotd/scheduler.sh
 ```
 
-`scheduler.sh` sleeps until a random time in the 06:00–23:59 window, runs `main.py`, then has a ~15% chance of sleeping again and running `main.py --bonus`.
+`scheduler.sh` runs three time slots per day, each delivering one independent message (each picks a persona via `pick_persona()`):
+
+- **Slot A** — random moment in 06:00–12:00 (guaranteed)
+- **Slot B** — random moment in 12:00–18:00 (guaranteed)
+- **Slot C** — random moment in 18:00–24:00 (30% chance)
+
+Average ~2.3 messages/day. A slot whose window has already closed when cron fires (e.g. cron started late) is skipped — we don't fire two messages back-to-back.
 
 ## Environment Variables
 
 | Variable | Purpose |
 |---|---|
 | `OPENAI_API_KEY` | OpenAI API authentication |
-| `ADMIN_WEBHOOK` | Discord webhook — currently the active send target in `main.py` (swap to `QOTD_WEBHOOK` for production) |
-| `QOTD_WEBHOOK` | Primary quote channel webhook |
-| `ALOE_WEBHOOK` | Secondary channel webhook |
+| `DEALER_WEBHOOK` | Discord webhook for The Quote Dealer. Set webhook avatar/name in Discord. |
+| `PLUG_WEBHOOK` | Discord webhook for The Quote Plug. Set webhook avatar/name in Discord. |
+| `POSTMAN_WEBHOOK` | Discord webhook for The Quote Postman. Set webhook avatar/name in Discord. |
 | `HEALTHCHECK_URL` | healthchecks.io ping URL (optional). Pinged by `scheduler.sh` on start/success/failure so an off-host service alerts when the Pi goes silent. |
+
+**Setting up webhooks:** Create three Discord webhooks (one per persona) in your target channel. In Discord's webhook settings, set the avatar and username for each. Paste the webhook URLs into `.env`.
 
 ## Logging
 
@@ -54,7 +75,7 @@ The Pi being silent is the failure mode that on-host logs can't catch. `schedule
 
 **One-time setup on healthchecks.io:**
 1. Create a check named `qotd-daily`.
-2. Schedule: period **1 day**, grace **20 hours**. (The script sends at a random time between 06:00–23:59, so consecutive successful pings can be up to ~42h apart in the worst case. Period 24h + grace 20h covers that.)
+2. Schedule: period **12 hours**, grace **14 hours**. (Now that we deliver in three time bands, the worst-case gap between consecutive successful pings is roughly slot-A early one day → slot-B late next day, ~26h. Period 12h + grace 14h alerts within that window.)
 3. Add a Discord notification integration pointed at `ADMIN_WEBHOOK`.
 4. Paste the ping URL into `.env` as `HEALTHCHECK_URL=`.
 
@@ -97,12 +118,12 @@ last -x | head -20
 
 ## Architecture
 
-**`main.py`** — Entry point with two functions:
+**`main.py`** — Entry point. CLI flags: `--persona {dealer,plug,postman}` (force a persona; default is weighted random) and `--dry-run` (print to stdout instead of posting).
 - `send_to_discord(webhook, content)` — POSTs to a Discord webhook URL; returns `True` on HTTP 204
-- `get_quote_of_the_day(input, bonus=False)` — Calls OpenAI and returns the quote string; when `bonus=True`, appends a user message prompting the dealer to acknowledge the bonus delivery in character
+- `get_quote_of_the_day(prompt)` — Calls OpenAI with the given system prompt and returns the quote string
 
 Uses the `/v1/responses` endpoint (not `/v1/chat/completions`). Response parsed as `data["output"][0]["content"][0]["text"]`. OpenAI call has a 30s timeout.
 
-**`scheduler.sh`** — Cron-driven scheduler. Uses `python3` to generate random sleep durations (avoids bash `$RANDOM` 32767 limit). Runs the venv Python at `.venv/bin/python3`.
+**`scheduler.sh`** — Cron-driven scheduler. Pings healthchecks.io on `/start` / success / `/fail`. Uses `python3` to generate random sleep durations (avoids bash `$RANDOM` 32767 limit). Runs the venv Python at `.venv/bin/python3`. The 3-slot logic lives in `run_slot()` — call it with a label, window-start epoch, and window-end epoch.
 
-**`system_prompt.py`** — Defines the "Quote Dealer" persona imported by `main.py`. Edit this to change quote tone, style, or output format rules.
+**`system_prompt.py`** — Defines the persona cast (`PERSONAS` dict) and `pick_persona()`. Three personas: dealer / plug / postman. Edit prompts to change tone or rules, edit weights to rebalance frequency.

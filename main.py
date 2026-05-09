@@ -6,7 +6,7 @@ from logging.handlers import RotatingFileHandler
 
 import requests
 from dotenv import load_dotenv
-from system_prompt import SYSTEM_PROMPT
+from system_prompt import PERSONAS, pick_persona
 
 load_dotenv()
 
@@ -50,15 +50,10 @@ def send_to_discord(webhook: str, content: str):
         return False
 
 
-def get_quote_of_the_day(input: str, bonus: bool = False):
+def get_quote_of_the_day(prompt: str):
     url = "https://api.openai.com/v1/responses"
 
-    messages = [{"role": "system", "content": input}]
-    if bonus:
-        messages.append({
-            "role": "user",
-            "content": "The dealer is feeling generous today. Deliver a bonus quote, but first acknowledge the occasion with a short in-character line — something in the spirit of 'two for the price of one' but make it your own. Keep the acknowledgement brief and on-brand."
-        })
+    messages = [{"role": "system", "content": prompt}]
 
     model = "gpt-5.4-mini"
     payload = {
@@ -68,10 +63,10 @@ def get_quote_of_the_day(input: str, bonus: bool = False):
 
     headers = {
         "Authorization": f"Bearer {os.getenv('OPENAI_API_KEY')}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
     }
 
-    log.info("calling openai (model=%s, bonus=%s)", model, bonus)
+    log.info("calling openai (model=%s)", model)
     try:
         response = requests.post(url, headers=headers, json=payload, timeout=30)
         response.raise_for_status()
@@ -91,24 +86,53 @@ def get_quote_of_the_day(input: str, bonus: bool = False):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--bonus", action="store_true")
+    parser.add_argument(
+        "--persona",
+        choices=sorted(PERSONAS.keys()),
+        help="Force a specific persona instead of weighted random.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the quote to stdout instead of posting to Discord.",
+    )
     args = parser.parse_args()
 
-    missing = [v for v in ("OPENAI_API_KEY", "QOTD_WEBHOOK") if not os.getenv(v)]
+    required = ["OPENAI_API_KEY"]
+    if not args.dry_run:
+        required.extend(["DEALER_WEBHOOK", "PLUG_WEBHOOK", "POSTMAN_WEBHOOK"])
+    missing = [v for v in required if not os.getenv(v)]
     if missing:
         log.error("missing required env vars: %s", ", ".join(missing))
         sys.exit(2)
 
-    log.info("run starting (bonus=%s)", args.bonus)
+    if args.persona:
+        key = args.persona
+        name = PERSONAS[key]["name"]
+        prompt = PERSONAS[key]["prompt"]
+    else:
+        key, name, prompt = pick_persona()
+
+    webhooks = {
+        "dealer": os.getenv("DEALER_WEBHOOK"),
+        "plug": os.getenv("PLUG_WEBHOOK"),
+        "postman": os.getenv("POSTMAN_WEBHOOK"),
+    }
+
+    log.info("run starting (persona=%s, dry_run=%s)", name, args.dry_run)
     try:
-        quote = get_quote_of_the_day(SYSTEM_PROMPT, bonus=args.bonus)
-        ok = send_to_discord(os.getenv("QOTD_WEBHOOK"), quote)
+        quote = get_quote_of_the_day(prompt)
+        if args.dry_run:
+            print(quote)
+            log.info("run finished ok (persona=%s, dry-run)", name)
+            return
+        ok = send_to_discord(webhooks[key], quote)
         if not ok:
-            log.error("run finished with discord send failure")
+            log.error("run finished with discord send failure (persona=%s)", name)
             sys.exit(1)
-        log.info("run finished ok")
+        log.info("run finished ok (persona=%s)", name)
     except Exception:
-        log.exception("run failed")
+        log.exception("run failed (persona=%s)", name)
         sys.exit(1)
 
 
