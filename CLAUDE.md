@@ -33,6 +33,67 @@ crontab -e
 | `ADMIN_WEBHOOK` | Discord webhook — currently the active send target in `main.py` (swap to `QOTD_WEBHOOK` for production) |
 | `QOTD_WEBHOOK` | Primary quote channel webhook |
 | `ALOE_WEBHOOK` | Secondary channel webhook |
+| `HEALTHCHECK_URL` | healthchecks.io ping URL (optional). Pinged by `scheduler.sh` on start/success/failure so an off-host service alerts when the Pi goes silent. |
+
+## Logging
+
+Both `main.py` and `scheduler.sh` write to `logs/` next to the scripts (gitignored).
+
+- `logs/qotd.log` — application log from `main.py` (rotating, 512 KB × 3 backups). Includes OpenAI call attempts, Discord webhook results, and full tracebacks on failure.
+- `logs/scheduler.log` — scheduler timeline: when cron fired, sleep durations, exit codes, healthchecks.io ping results. Also captures stderr from each `main.py` invocation.
+
+Tail both during a run: `tail -f logs/scheduler.log logs/qotd.log`.
+
+## Off-host heartbeat (healthchecks.io)
+
+The Pi being silent is the failure mode that on-host logs can't catch. `scheduler.sh` pings healthchecks.io at three points:
+
+- `${HEALTHCHECK_URL}/start` — when cron fires (before any sleep).
+- `${HEALTHCHECK_URL}` — after a successful `main.py` run.
+- `${HEALTHCHECK_URL}/fail` (with the tail of `scheduler.log` as the body) — after a failing run.
+
+**One-time setup on healthchecks.io:**
+1. Create a check named `qotd-daily`.
+2. Schedule: period **1 day**, grace **20 hours**. (The script sends at a random time between 06:00–23:59, so consecutive successful pings can be up to ~42h apart in the worst case. Period 24h + grace 20h covers that.)
+3. Add a Discord notification integration pointed at `ADMIN_WEBHOOK`.
+4. Paste the ping URL into `.env` as `HEALTHCHECK_URL=`.
+
+If `HEALTHCHECK_URL` is unset the pings are skipped silently — useful for local dev.
+
+## Recovery (when the Pi goes silent)
+
+If healthchecks.io alerts that the Pi missed its window — or you notice no quote landed — the script logs are not enough. Pi system logs are where the real evidence lives, and on a default Pi OS install they are wiped on reboot.
+
+**One-time Pi setup (do this once after recovery so the *next* crash leaves a trail):**
+```bash
+sudo mkdir -p /var/log/journal
+sudo systemd-tmpfiles --create --prefix /var/log/journal
+sudo systemctl restart systemd-journald
+journalctl --disk-usage   # verify
+```
+Do **not** install `log2ram` — it does the opposite of what we want here (RAM-only logs are lost on reboot).
+
+**Post-mortem cheat sheet (run when the Pi comes back):**
+```bash
+# Did it cleanly shut down or crash? Tail of the previous boot:
+journalctl -b -1 -n 200 --no-pager
+
+# Common Pi Zero killers — undervoltage, OOM, SD-card I/O errors, fs corruption:
+dmesg | grep -i -E 'under-?voltage|throttl|oom|i/o error|ext4-fs error|hung_task'
+
+# Disk full? Pi Zero SD cards die quietly when /var fills up:
+df -h
+
+# When did cron actually fire?
+grep CRON /var/log/syslog | tail -50
+
+# What did the scripts say last?
+tail -100 ~/qotd/logs/scheduler.log
+tail -100 ~/qotd/logs/qotd.log
+
+# Reboot loop?
+last -x | head -20
+```
 
 ## Architecture
 
