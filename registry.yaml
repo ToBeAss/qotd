@@ -1,0 +1,101 @@
+# QOTD — single source of truth.
+# Identity, webhook mapping, scheduling weights, and location all live here.
+# Adding a character means: one block below + one new agents/<key>.md + one env var.
+
+# Model config. model is the single source of truth; temperature is optional —
+# raise it (e.g. 1.1–1.3) for more variety. Some reasoning models reject the
+# temperature parameter; if you get an API error, comment it back out.
+llm:
+  model: "gpt-5.4-mini"
+  #interaction_model: "gpt-5.4"   # optional: stronger model for the rare interactions
+  temperature: 1.1
+
+# Chance per day that the cast runs an interaction instead of posting a quote.
+# Kept low so it stays special. ~0.07 ≈ once every two weeks.
+interaction_chance: 0.07
+
+# Optional narrator webhook. When set, the scene description is posted here before
+# an interaction's dialogue. Leave the env var blank to skip the narrator.
+storyteller_webhook_env: "STORYTELLER_WEBHOOK"
+
+location:
+  # Kristiansand — used for local sunset/dusk computation (Dealer's hours track it).
+  lat: 58.1467
+  lon: 7.9956
+  timezone: "Europe/Oslo"
+
+# Global quiet hours. No character posts outside this window, whatever their own
+# distribution says. End wraps past midnight: 00:30 is "tomorrow."
+quiet_hours:
+  start: "07:30"
+  end: "00:30"
+
+characters:
+
+  dealer:
+    name: "The Quote Dealer"
+    prompt_file: "agents/dealer.md"
+    webhook_env: "DEALER_WEBHOOK"
+    # Mon Tue Wed Thu Fri Sat Sun — flat, with the slight overall favour he gets
+    # as the canonical voice plus a small weekend lift.
+    day_weights: [44, 42, 42, 42, 44, 46, 46]
+    # Base hour shape (hour -> weight). Liminal spikes at the dawn edge (07) and
+    # the midnight tail, evening mass through 18–23. The evening mass is shifted
+    # at runtime to track actual dusk; a low daytime floor keeps an early,
+    # light-out appearance always possible but rare.
+    hours:
+      7: 2
+      8: 1
+      9: 1
+      12: 1
+      15: 2
+      17: 2
+      18: 3
+      19: 4
+      20: 5
+      21: 6
+      22: 6
+      23: 5
+      0: 4
+
+  plug:
+    name: "The Quote Plug"
+    prompt_file: "agents/plug.md"
+    webhook_env: "PLUG_WEBHOOK"
+    # Hates Mondays, builds toward the weekend.
+    day_weights: [12, 18, 20, 22, 30, 55, 52]
+    # Hard zero before noon — Gen Z does not do mornings. Evening/night weighted,
+    # trailing into the 00:00–00:30 sliver.
+    hours:
+      12: 2
+      13: 2
+      14: 2
+      15: 3
+      16: 3
+      17: 3
+      18: 4
+      19: 4
+      20: 5
+      21: 5
+      22: 5
+      23: 4
+      0: 3
+
+  postman:
+    name: "The Quote Postman"
+    prompt_file: "agents/postman.md"
+    webhook_env: "POSTMAN_WEBHOOK"
+    # Loves Mondays, fades through the week, hard zero on the weekend (0 = never).
+    day_weights: [42, 32, 32, 30, 28, 0, 0]
+    # Working hours only, front-loaded. The taper to 16 is the "sorry I'm late,
+    # traffic was awful" tail.
+    hours:
+      8: 5
+      9: 5
+      10: 4
+      11: 3
+      12: 3
+      13: 2
+      14: 2
+      15: 2
+      16: 1
