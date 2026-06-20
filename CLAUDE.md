@@ -31,7 +31,7 @@ one `agents/<key>.md`, and one webhook env var. Nothing else hard-codes the cast
 
 ```
 registry.yaml          # single source of truth: identity, webhook mapping,
-                        #   day/hour weights, location
+                        #   day/hour weights, location, llm model + temperature
 agents/
   _common.md           # house rules + context-block instruction (shared)
   dealer.md  plug.md  postman.md   # voice only
@@ -40,7 +40,7 @@ llm.py                 # OpenAI Responses API call (raw requests, no SDK)
 memory.py              # state/memory.json: last_posted, recent_quotes, post_count
 obs.py                 # shared logger + throttled admin-channel error reporting
 planner.py             # 07:00 cron: decides the day, writes a plan file
-dispatch.py            # */5 cron: fires due posts, generates, posts, records
+dispatch.py            # every-minute cron: fires due posts, generates, posts, records
 state/                 # plan-*.json, memory.json, admin_throttle.json
 ```
 
@@ -71,7 +71,7 @@ Testing flags: `--date YYYY-MM-DD`, `--seed N`, `--force`, `--print`.
 
 ### Dispatch (`dispatch.py`)
 
-Runs every 5 minutes. Scans plan files for entries that are due (`fire_at <= now`)
+Runs every minute. Scans plan files for entries that are due (`fire_at <= now`)
 and unsent. For each: renders the context block from the frozen facts plus the
 character's live `recent_quotes` (injected as anti-repetition negatives),
 generates the quote, posts to the character's webhook, flips `sent`, and records
@@ -114,9 +114,15 @@ python dispatch.py              # fire anything currently due
 **Cron on the Pi:**
 
 ```cron
-0  7 * * *  cd /path/to/qotd && /path/to/qotd/.venv/bin/python planner.py
-*/5 * * * *  cd /path/to/qotd && /path/to/qotd/.venv/bin/python dispatch.py
+0 7 * * *  cd /path/to/qotd && /path/to/qotd/.venv/bin/python planner.py
+* * * * *  cd /path/to/qotd && /path/to/qotd/.venv/bin/python dispatch.py
 ```
+
+Dispatch runs **every minute** (not every 5) so posts land on the planner's
+random `fire_at` minute rather than rounding up to a 5-minute mark, which would
+read as artificial. The flock in dispatch makes this safe — a slow generation or
+an interaction playout that spans several ticks just causes the next ticks to
+exit on the held lock. Idle ticks are a cheap cold-start that finds nothing due.
 
 ## State Files
 
@@ -133,6 +139,7 @@ python dispatch.py              # fire anything currently due
 | `OPENAI_API_KEY` | OpenAI authentication. |
 | `DEALER_WEBHOOK` / `PLUG_WEBHOOK` / `POSTMAN_WEBHOOK` | One Discord webhook per character. Set avatar/username in Discord. |
 | `ADMIN_WEBHOOK` | Optional. Errors are posted here, rate-limited. Blank = log only. |
+| `STORYTELLER_WEBHOOK` | Optional narrator. Posts the scene before an interaction's dialogue. Blank = no scene message. |
 
 ## Logging
 

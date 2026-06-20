@@ -1,4 +1,4 @@
-"""Dispatch — runs every 5 minutes.
+"""Dispatch — runs every minute.
 
 Scans plan files for entries that are due (fire_at <= now) and unsent, renders
 the context block from the frozen facts plus live recent-quotes, generates the
@@ -31,7 +31,7 @@ LOCK_PATH = STATE_DIR / "dispatch.lock"
 INTERACTION_LOG = STATE_DIR / "interactions.log"
 
 # Give up on an entry after this many failed attempts so a persistent failure
-# (dead API, bad webhook) doesn't retry every 5 minutes all day.
+# (dead API, bad webhook) doesn't retry on every tick all day.
 MAX_ATTEMPTS = 3
 
 log = obs.get_logger()
