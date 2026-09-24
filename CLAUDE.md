@@ -147,6 +147,45 @@ dispatch computes `dealer_absent` at fire time: days since the Dealer's
 tells them he's around and not to mention covering, standing in, or him being
 away. True → a covering reference is allowed, not required.
 
+## Interactions
+
+On an interaction day (`interaction_chance`) the cast talks instead of posting a
+quote; the scene **replaces** the day's quote, so it never refers to "today's
+quote". Everything is written at plan time by `storyteller.py` and frozen into the
+plan; dispatch only posts the lines, narrator first.
+
+- **Material**: `storyteller.material_block` gives the director each character's
+  last 2 posts (newest first, markdown stripped, ~200 chars, the newest tagged
+  with `last_posted`). Bank and remix posts resolve through `recent_bank` so the
+  author is named ("plug remixed Oscar Wilde: …").
+- **Material roll**: `scene_material_chance` (registry, 0.5). True → the premise
+  must reference something concrete in the material. False → the material is
+  background only and the director invents a fresh office situation. Stored on
+  the plan as `from_material` (always false while there's no material yet).
+- **Schema**: the director returns `scene` (posted by the narrator), `premise`
+  (one sentence, who wants what and what's in the way; not posted), `medium`,
+  `time_of_day`, `turns` and `beats` (one short intent per turn, same length;
+  the last one closes or deflates the premise). A parse or validation failure is
+  retried once, then raises, and the planner falls back to a normal day with an
+  admin report. `premise`, `beats` and `from_material` are frozen into the plan.
+- **Lines**: each speaker gets the premise and its own beat. The final speaker is
+  told to resolve or deflate the premise. `"..."` is allowed only when the beat
+  calls for silence (prompt rule, not a code check).
+- **Grounding**: the first speaker is told the audience can't see the scene
+  (`_GROUNDING`) only when no narrator is configured (`STORYTELLER_WEBHOOK`
+  blank). Decided at plan time from the environment. `preview.py pipeline --dry`
+  fills a missing storyteller env with `"dry"` only after planning, so it plans
+  with your real narrator setting.
+- **Recent premises**: after a complete playout, dispatch appends the premise to
+  `recent_premises` in memory (cap 10) and writes `premise`, `beats` and
+  `from_material` into `interactions.log`. The director is shown the last 5 and
+  told not to repeat them or their core joke.
+
+`preview.py interaction` runs the planner's path with real memory and prints the
+premise, `from_material` and the beats above the transcript. `--material` /
+`--no-material` force the roll; `--remember` records the premise (its only memory
+write); `--post` sends it.
+
 ## Quote Bank
 
 `data/quotes.jsonl`, one object per line:
@@ -206,7 +245,10 @@ exit on the held lock. Idle ticks are a cheap cold-start that finds nothing due.
 - `state/memory.json` — per character: `last_posted`, `recent_quotes` (last 15,
   the posted text), `post_count`, and `recent_bank` (last 15 bank-based posts:
   `{quote_id, framing|remix, posted}`). Top level: `quote_usage`
-  (`{quote_id: "YYYY-MM-DD"}`, shared across characters).
+  (`{quote_id: "YYYY-MM-DD"}`, shared across characters) and `recent_premises`
+  (last 10 completed interactions: `{date, premise}`, newest last).
+- `state/interactions.log` — one JSON line per completed interaction: scene,
+  premise, beats, `from_material`, medium and transcript.
 - `state/admin_throttle.json` — rate-limit bookkeeping for admin error posts.
 
 ## Environment Variables

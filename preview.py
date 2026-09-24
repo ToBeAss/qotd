@@ -11,6 +11,7 @@ actually send to Discord. Examples:
   python preview.py quote --model gpt-5.4-mini --effort low   # A/B a model
 
   python preview.py interaction           # direct + generate a full scene, printed
+  python preview.py interaction --material      # force a scene built from recent posts
   python preview.py interaction --post --fast   # post it, skip the real delays
 
   python preview.py pipeline              # run planner + dispatch with everything
@@ -42,7 +43,7 @@ import memory
 import planner
 import quotes
 import storyteller
-from registry import load_registry
+from registry import STORYTELLER_KEY, load_registry
 
 STATE_DIR = Path(__file__).resolve().parent / "state"
 
@@ -112,7 +113,6 @@ def cmd_quote(args) -> None:
 def cmd_interaction(args) -> None:
     reg = load_registry()
     now = _now(reg)
-    weekday = now.strftime("%A")
 
     if args.cast:
         eligible = [k.strip() for k in args.cast.split(",") if k.strip()]
@@ -125,30 +125,46 @@ def cmd_interaction(args) -> None:
         if len(eligible) < 2:
             eligible = [ch.key for ch in reg]  # ignore day rules for a forced preview
 
-    scene = storyteller.direct(eligible, weekday)
-    lines = storyteller.generate_lines(reg, scene["scene"], scene["medium"], scene["turns"])
-    storyteller.assign_delays(lines, scene["medium"], random.Random())
+    # The planner's own path: real memory for the material block and recent
+    # premises, and the material roll unless --material / --no-material forces it.
+    mem = memory.load()
+    plan = planner.build_interaction_plan(
+        reg, now.date(), now.tzinfo, random.Random(), eligible,
+        planner._hhmm(reg.quiet_start), planner._hhmm(reg.quiet_end),
+        mem, from_material=args.material,
+    )
 
-    print(f"--- scene [{scene['medium']} / {scene['time_of_day']}] ---")
-    print(f"(narrator) {scene['scene']}\n")
-    for ln in lines:
-        print(f"{reg[ln['character']].name}: {ln['line']}   (+{ln['delay_after']}s)")
+    print(f"--- scene [{plan['medium']} / {plan['time_of_day']}] ---")
+    print(f"premise:       {plan['premise']}")
+    print(f"from_material: {plan['from_material']}")
+    lines = [e for e in plan["entries"] if e["character"] != STORYTELLER_KEY]
+    for e, beat in zip(lines, plan["beats"]):
+        print(f"  beat ({e['character']}): {beat}")
+    print(f"\n(narrator) {plan['scene']}\n")
+    for e in lines:
+        print(f"{reg[e['character']].name}: {e['line']}   (+{e['delay_after']}s)")
+
+    if args.remember:
+        memory.record_premise(mem, plan["date"], plan["premise"])
+        memory.save(mem)
+        print("\n[premise remembered — the director will avoid it next time]")
 
     if args.post:
         print("\n[posting...]")
-        if reg.storyteller_webhook:
-            dispatch.post_to_discord(reg.storyteller_webhook, scene["scene"])
-            time.sleep(0 if args.fast else (3 if scene["medium"] == "irl" else 10))
-        else:
-            print("[STORYTELLER_WEBHOOK not set; scene not posted]")
-        for i, ln in enumerate(lines):
-            ch = reg[ln["character"]]
-            if not ch.webhook:
-                print(f"[!] {ch.webhook_env} not set; skipping")
-                continue
-            dispatch.post_to_discord(ch.webhook, ln["line"])
-            if i != len(lines) - 1:
-                time.sleep(0 if args.fast else ln["delay_after"])
+        for i, e in enumerate(plan["entries"]):
+            if e["character"] == STORYTELLER_KEY:
+                wh = reg.storyteller_webhook
+                if not wh:
+                    print("[STORYTELLER_WEBHOOK not set; scene not posted]")
+                    continue
+            else:
+                wh = reg[e["character"]].webhook
+                if not wh:
+                    print(f"[!] {reg[e['character']].webhook_env} not set; skipping")
+                    continue
+            dispatch.post_to_discord(wh, e["line"])
+            if i != len(plan["entries"]) - 1:
+                time.sleep(0 if args.fast else e["delay_after"])
         print("[done]")
 
 
@@ -224,6 +240,11 @@ def main() -> None:
     i.add_argument("--cast", help="comma-separated keys to force, e.g. postman,dealer")
     i.add_argument("--post", action="store_true", help="send to Discord")
     i.add_argument("--fast", action="store_true", help="skip the real inter-line delays when posting")
+    i.add_argument("--material", dest="material", action="store_true", default=None,
+                   help="force a scene built from recent posts (default: the normal roll)")
+    i.add_argument("--no-material", dest="material", action="store_false",
+                   help="force a fresh office situation (material as background only)")
+    i.add_argument("--remember", action="store_true", help="record the premise to memory")
     i.set_defaults(func=cmd_interaction)
 
     pl = sub.add_parser("pipeline", help="planner + dispatch, everything forced due now")

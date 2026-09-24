@@ -282,7 +282,7 @@ def build_plan(reg: Registry, today: date, tz: ZoneInfo, rng: random.Random) -> 
         eligible = [ch.key for ch in reg if ch.day_weight(weekday) > 0]
         if len(eligible) >= 2:
             try:
-                return build_interaction_plan(reg, today, tz, rng, eligible, qs, qe)
+                return build_interaction_plan(reg, today, tz, rng, eligible, qs, qe, mem)
             except Exception as exc:
                 obs.get_logger().warning(
                     "interaction planning failed, falling back to normal: %s", exc
@@ -346,13 +346,27 @@ def build_interaction_plan(
     eligible: list[str],
     qs: tuple[int, int],
     qe: tuple[int, int],
+    mem: dict | None = None,
+    from_material: bool | None = None,
 ) -> dict:
     """Direct a scene, generate all lines sequentially, freeze them with delays.
-    Raises on any failure so the caller can fall back to a normal plan."""
-    scene = storyteller.direct(eligible, today.strftime("%A"), model=reg.interaction_model)
-    lines = storyteller.generate_lines(
-        reg, scene["scene"], scene["medium"], scene["turns"], model=reg.interaction_model
+    Raises on any failure so the caller can fall back to a normal plan.
+    `from_material` forces the material roll (preview); None rolls it."""
+    mem = memory.load() if mem is None else mem
+    material = storyteller.material_block(reg, mem)
+    if from_material is None:
+        from_material = rng.random() < reg.scene_material_chance
+    from_material = from_material and bool(material)  # nothing to build from yet
+
+    scene = storyteller.direct(
+        eligible,
+        today.strftime("%A"),
+        material=material,
+        from_material=from_material,
+        recent_premises=memory.recent_premises(mem),
+        model=reg.interaction_model,
     )
+    lines = storyteller.generate_lines(reg, scene, model=reg.interaction_model)
     storyteller.assign_delays(lines, scene["medium"], rng)
 
     start_at = sample_interaction_start(scene["time_of_day"], today, tz, qs, qe, rng)
@@ -383,6 +397,9 @@ def build_interaction_plan(
         "kind": "interaction",
         "generated_at": datetime.now(tz).isoformat(timespec="seconds"),
         "scene": scene["scene"],
+        "premise": scene["premise"],
+        "beats": scene["beats"],
+        "from_material": from_material,
         "medium": scene["medium"],
         "time_of_day": scene["time_of_day"],
         "start_at": start_at.isoformat(),

@@ -2,24 +2,29 @@
 
 Two jobs, both at plan time:
 
-1. direct(): one LLM call that sets a scene — situation, medium, time of day, and
-   the ordered turns (who speaks each beat). Returns validated structured data.
+1. direct(): one LLM call that sets a scene — situation, premise (who wants what,
+   and what's in the way), medium, time of day, the ordered turns (who speaks
+   each beat) and one intent per turn. Returns validated structured data.
 2. generate_lines(): sequential per-character generation. Each line is produced by
-   that character's own full persona prompt with the running transcript, so voices
-   stay isolated and can't blend. The whole exchange is written upfront and frozen
-   into the plan; dispatch only posts.
+   that character's own full persona prompt with the running transcript, the
+   premise and its own beat, so voices stay isolated and can't blend. The whole
+   exchange is written upfront and frozen into the plan; dispatch only posts.
 
-Lines may be exactly "..." — a real, intentional beat (the Postman staying
-unbothered) that posts and enters the transcript the next speaker reacts to.
+The director is handed material from memory (each character's last couple of
+posts) and the recent premises, so scenes can be about something real and don't
+repeat. Lines may be exactly "..." when a beat calls for silence.
 """
 
 from __future__ import annotations
 
 import json
 import random
+import re
 from typing import Any
 
 import llm
+import memory
+import quotes
 from registry import Registry
 
 MEDIA = {"irl", "messaging"}
@@ -29,6 +34,20 @@ TIMES = {"morning", "lunch", "afternoon", "evening", "night"}
 IRL_DELAY = (4, 12)
 MESSAGING_DELAY = (25, 75)
 
+# Premise is a single sentence; a little slack over the prompt's ~250.
+PREMISE_MAX = 300
+
+# Material block: posts per character, and the length each is cut to.
+MATERIAL_POSTS = 2
+MATERIAL_CHARS = 200
+
+# How many recent premises the director is told not to repeat.
+RECENT_PREMISES_SHOWN = 5
+
+# The director reasons over material, premises and beats; it can outlast llm's
+# 30s default. It runs at plan time (07:00), so waiting longer costs nothing.
+DIRECTOR_TIMEOUT = 90.0
+
 
 class StorytellerError(RuntimeError):
     pass
@@ -36,76 +55,166 @@ class StorytellerError(RuntimeError):
 
 _DIRECTOR_PROMPT = """You direct a tiny recurring comedy about three characters \
 who run a "quote of the day" operation together. Occasionally they interact \
-instead of just posting a quote. Your job is to set ONE short scene.
+instead of posting a quote. Your job is to set ONE short scene that is about \
+something.
 
 The cast:
 - dealer: noir, theatrical, mysterious, the canonical lead. Takes himself a little \
 seriously.
-- plug: chronically-online Gen-Z, brainrot, lighthearted, overshares, never mean.
-- postman: calm, plain, observational. The still point — funniest when unbothered.
+- plug: chronically-online Gen-Z, brainrot, lighthearted, overshares, never mean. \
+Remixes real quotes into his own register.
+- postman: calm, plain, literal. Delivers real quotes with a dry note. The anchor \
+who undercuts: deadpan, and the one who says the fact that ends the argument.
+
+Today there is no quote post: this scene replaces it. Never reference "today's \
+quote" or a quote being posted today. Their past posts are fair game.
 
 Output STRICT JSON and nothing else (no prose, no markdown fences):
 {
   "scene": "<one or two sentences setting the situation; this is posted as the \
 scene-setting line the audience reads before the dialogue>",
+  "premise": "<one sentence: who wants what, and what's in the way. Not posted.>",
   "medium": "irl" | "messaging",
   "time_of_day": "morning" | "lunch" | "afternoon" | "evening" | "night",
-  "turns": ["<character key>", ...]
+  "turns": ["<character key>", ...],
+  "beats": ["<intent for turn 1>", "<intent for turn 2>", ...]
 }
 
 Rules:
+- Small stakes, real want. Someone wants something small and specific; someone \
+or something is in the way; the scene turns once and lands. After reading it, \
+you should be able to say in one sentence what happened.
+- Contrast over wit: not everyone is funny, and three people performing at once \
+is exhausting. But a flat line still has to land on something: undercut, side \
+with the wrong party, state the fact that ends the argument. Never a dead end.
 - 3 to 5 turns. Three is the floor (a three-beat joke); go longer when the cast \
-and scene support it. Hard max 5. Vary it — don't default to the same length.
-- A character may speak more than once.
-- Only cast characters listed as available below.
+and premise support it. Hard max 5. Vary it — don't default to the same length.
+- A character may speak more than once. Only cast characters listed as available.
+- beats: one per turn, same order and length as turns. Each is a short intent \
+("insists Wilde would have loved it", "points out the date on the letter"), not \
+a line of dialogue. The last beat closes or deflates the premise. A beat may \
+call for silence ("says nothing") when silence is the point.
 - medium and time_of_day must FIT the scene: a lunch-room run-in is "irl" at \
 "lunch"; a late-night group chat is "messaging" at "night".
-- Keep the friction small and mundane. The comedy is in restraint and contrast, \
-not in everyone being witty. A jammed printer, a late delivery, one of them \
-rehearsing too hard — small. Three people performing at once is exhausting; let \
-someone be flat, bored, or barely paying attention.
-- Home base is their workplace: the quote room / office where the daily quote \
-gets made. Most scenes happen there — it's the recurring set, and that \
-familiarity is the point. Vary what's *happening* in the room rather than \
-relocating every time. Venture out only occasionally (a café run, the walk in).
+- Home base is their workplace: the quote room / office. Most scenes happen \
+there — it's the recurring set, and that familiarity is the point. Vary what's \
+*happening* in the room rather than relocating every time. Venture out only \
+occasionally (a café run, the walk in).
 - Within the office, don't lean on equipment breaking (printers, toner, markers). \
-That's one situation among many and wears out fast; the room has more going on \
-than malfunctioning machines.
+That's one situation among many and wears out fast.
 - Mix the medium: some scenes are just the three of them texting.
-- The Postman is a good anchor — include him when you can, doing very little.
-- Write scenes in the spirit of these seeds, but invent fresh ones — do not copy, \
-and don't lean on any single one:
-  * A disagreement about whether today's quote is any good.
-  * One of them is in an unreasonable mood; the others react.
-  * Some small thing in the room — a sticky note, a humming light, a squeaky \
-chair, a stapler — becomes a whole debate, far past what it deserves.
-  * The Dealer is theatrical about something trivial; Plug narrates it, the \
-Postman deadpans.
-  * They're waiting on each other, or on the day to start.
-  * A tiny disagreement that escalates pointlessly and resolves with a shrug.
-  * Someone shares a small win, or a small complaint.
-  * A half-asleep group chat at an odd hour about nothing in particular.
-  * The same little prompt lands on all three completely differently.
+- The Postman is a good anchor — include him when you can.
+- Write premises in the spirit of these seeds, but invent fresh ones — do not \
+copy, and don't lean on any single one:
+  * Someone objects to one of the others' recent posts and wants it \
+acknowledged, retracted, or credited.
+  * The Plug defends a remix as "basically the same thing"; the Dealer takes it \
+personally.
+  * Two of them need the third to settle a bet, and the third won't play along.
+  * Someone wants the others to notice a small win. They don't, or they notice \
+the wrong thing.
+  * The Postman is asked to deliver or say something he won't.
+  * The Dealer wants to be taken seriously about something trivial; nobody does.
+  * Someone wants a favour, a day off, or the last of something, and has to ask.
 """
 
+_MATERIAL_BUILD = (
+    "Build this scene from the material above: the premise must reference "
+    "something concrete in it (a specific post, a remix, an author, a delivery)."
+)
+_MATERIAL_BACKGROUND = (
+    "The material above is background only. Invent a fresh office situation; the "
+    "material must not be the premise."
+)
 
-def direct(available: list[str], weekday_name: str, *, model: str | None = None) -> dict[str, Any]:
-    """Ask the director for a scene. Validates against the available cast."""
+
+# --- Material -----------------------------------------------------------------
+def _plain(text: str) -> str:
+    text = re.sub(r"[*_`]", "", text)
+    return re.sub(r"\s*\n\s*", " / ", text).strip()
+
+
+def _cut(text: str, limit: int = MATERIAL_CHARS) -> str:
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def material_block(reg: Registry, mem: dict) -> str:
+    """Each character's last MATERIAL_POSTS posts, newest first, as plain text.
+    Bank-based posts are resolved through recent_bank so the author is named.
+    Empty string when nobody has posted yet."""
+    bank = None
+    sections = []
+    for ch in reg:
+        posts = memory.recent_quotes(mem, ch.key)[-MATERIAL_POSTS:][::-1]  # newest last in memory
+        if not posts:
+            continue
+        records = {b.get("posted"): b for b in (mem.get(ch.key) or {}).get("recent_bank", [])}
+        last = (mem.get(ch.key) or {}).get("last_posted")
+
+        lines = []
+        for i, posted in enumerate(posts):
+            rec = records.get(posted)
+            if rec and bank is None:
+                bank = quotes.load_bank(reg.quote_bank) or {}
+            q = bank.get(rec["quote_id"]) if rec and bank else None
+            if rec and q and rec.get("remix"):
+                text = f'{ch.key} remixed {q.author}: "{_cut(rec["remix"])}"'
+            elif rec and q:
+                text = (
+                    f'{ch.key} delivered {q.author}: "{_cut(q.text)}" '
+                    f'with the note "{_cut(rec.get("framing", ""))}"'
+                )
+            else:
+                text = f"{ch.key} posted: {_cut(_plain(posted))}"
+            if i == 0 and last:
+                text = f"({last[:10]}) {text}"
+            lines.append(f"- {text}")
+        sections.append("\n".join(lines))
+    return "\n".join(sections)
+
+
+# --- Director -----------------------------------------------------------------
+def direct(
+    available: list[str],
+    weekday_name: str,
+    *,
+    material: str = "",
+    from_material: bool = False,
+    recent_premises: list[str] | None = None,
+    model: str | None = None,
+) -> dict[str, Any]:
+    """Ask the director for a scene. Validates against the available cast; on a
+    parse or validation failure retries once, then raises StorytellerError."""
     if len(available) < 2:
         raise StorytellerError(f"need >=2 available characters, got {available}")
 
-    note = (
+    parts = [
         f"Today is {weekday_name}. Available cast: {', '.join(available)}."
         + ("" if "postman" in available else " (The Postman is off today.)")
-    )
-    raw = llm.generate(
-        [{"role": "user", "content": f"{note}\n\nSet today's scene."}],
-        instructions=_DIRECTOR_PROMPT,
-        model=model,
-    )
-    scene = _parse_scene(raw)
-    _validate_scene(scene, available)
-    return scene
+    ]
+    if material:
+        parts.append(f"<material>\n{material}\n</material>")
+        parts.append(_MATERIAL_BUILD if from_material else _MATERIAL_BACKGROUND)
+    if recent_premises:
+        listed = "\n".join(f"- {p}" for p in recent_premises[-RECENT_PREMISES_SHOWN:])
+        parts.append(f"Recent premises — do not repeat these premises or their core joke:\n{listed}")
+    parts.append("Set today's scene.")
+    prompt = "\n\n".join(parts)
+
+    for attempt in (1, 2):
+        raw = llm.generate(
+            [{"role": "user", "content": prompt}],
+            instructions=_DIRECTOR_PROMPT,
+            model=model,
+            timeout=DIRECTOR_TIMEOUT,
+        )
+        try:
+            scene = _parse_scene(raw)
+            _validate_scene(scene, available)
+            return scene
+        except StorytellerError:
+            if attempt == 2:
+                raise
 
 
 def _parse_scene(raw: str) -> dict[str, Any]:
@@ -124,13 +233,16 @@ def _parse_scene(raw: str) -> dict[str, Any]:
 
 
 def _validate_scene(scene: dict[str, Any], available: list[str]) -> None:
-    for field in ("scene", "medium", "time_of_day", "turns"):
+    for field in ("scene", "premise", "medium", "time_of_day", "turns", "beats"):
         if field not in scene:
             raise StorytellerError(f"scene missing '{field}'")
     if scene["medium"] not in MEDIA:
         raise StorytellerError(f"bad medium: {scene['medium']}")
     if scene["time_of_day"] not in TIMES:
         raise StorytellerError(f"bad time_of_day: {scene['time_of_day']}")
+    premise = scene["premise"]
+    if not isinstance(premise, str) or not premise.strip() or len(premise) > PREMISE_MAX:
+        raise StorytellerError(f"premise must be a non-empty sentence: {premise!r:.100}")
     turns = scene["turns"]
     if not isinstance(turns, list) or not (3 <= len(turns) <= 5):
         raise StorytellerError(f"turns must be a list of 3-5: {turns}")
@@ -138,24 +250,38 @@ def _validate_scene(scene: dict[str, Any], available: list[str]) -> None:
     bad = [t for t in turns if t not in avail]
     if bad:
         raise StorytellerError(f"turns cast unavailable characters: {bad}")
+    beats = scene["beats"]
+    if (
+        not isinstance(beats, list)
+        or len(beats) != len(turns)
+        or not all(isinstance(b, str) and b.strip() for b in beats)
+    ):
+        raise StorytellerError(f"beats must be {len(turns)} non-empty strings: {beats}")
 
 
+# --- Lines --------------------------------------------------------------------
 _TURN_TEMPLATE = """You're in a live {medium_desc} with the others. This is NOT a \
 quote delivery — your usual output format and "deliver a quote" rules do not apply \
-here. Just talk, in your established voice.
+here. Just talk, in your established voice. There's no quote post today, so don't \
+bring up "today's quote".
 
 Scene: {scene}
+What's going on: {premise}
 
 Conversation so far:
 {transcript}
 
-It's your turn ({name}). Reply with a single short line in character — one or two \
-sentences, said the way you'd actually say it.{grounding}{hint} This is a real \
-conversation, not a writers' room: don't force a punchline. It's fine to be flat, \
-brief, bored, or unbothered — most real lines are. You may reply with exactly \
-"..." if silence is the truest response. Output only your line: no name prefix, no \
-surrounding quotation marks, no markdown."""
+It's your turn ({name}). Your job this line: {beat}
 
+Reply with a single short line in character — one or two sentences. Be specific \
+to what's going on and say it the way you'd actually say it; no speeches.\
+{grounding}{hint}{closing} Reply with exactly "..." only if your job this line \
+calls for silence. Output only your line, as spoken: no name prefix, no \
+stage directions or actions in brackets, no surrounding quotation marks, no \
+markdown."""
+
+# Only when no narrator is configured: with one, the audience has already read the
+# scene line before the dialogue starts.
 _GROUNDING = (
     " You speak first, and the audience can't see the scene description — only the "
     "messages. So let your line quietly reveal the situation through how you react "
@@ -163,13 +289,19 @@ _GROUNDING = (
     "obvious to someone standing right there."
 )
 
+_CLOSING = (
+    " Your line closes the scene: resolve or deflate what's going on. A shrug "
+    "counts only if it's about the premise."
+)
+
 # Per-character nudges that apply ONLY in conversation, not in quote delivery.
 # The Postman especially drifts aphoristic here; in dialogue he should be plain.
 _INTERACTION_HINTS: dict[str, str] = {
     "postman": (
-        " In conversation you're blunter and more literal than in your quotes — "
-        "plain facts, dry, grounded, a little deadpan. Say the obvious thing flatly. "
-        "Save the gentle wisdom for the quotes; here you don't philosophise."
+        " In conversation you're blunter and more literal than in your delivery "
+        "notes — plain facts, dry, grounded, a little deadpan. Your plain line "
+        "lands: it's the fact that settles the argument or deflates it, never a "
+        "neutral acknowledgement. You don't philosophise."
     ),
     "dealer": (
         " You can be theatrical, but land it in one short line — you're talking, "
@@ -180,9 +312,13 @@ _INTERACTION_HINTS: dict[str, str] = {
 
 
 def generate_lines(
-    reg: Registry, scene: str, medium: str, turns: list[str], *, model: str | None = None
+    reg: Registry, scene: dict[str, Any], *, model: str | None = None
 ) -> list[dict[str, Any]]:
-    medium_desc = "face-to-face conversation" if medium == "irl" else "group chat"
+    """Write every line of a validated scene in order. The first speaker gets the
+    grounding nudge only when there's no narrator to post the scene line."""
+    medium_desc = "face-to-face conversation" if scene["medium"] == "irl" else "group chat"
+    narrated = bool(reg.storyteller_webhook)
+    turns = scene["turns"]
     transcript: list[tuple[str, str]] = []
     lines: list[dict[str, Any]] = []
 
@@ -191,11 +327,14 @@ def generate_lines(
         convo = "\n".join(f"{reg[k].name}: {t}" for k, t in transcript) or "(nothing yet)"
         prompt = _TURN_TEMPLATE.format(
             medium_desc=medium_desc,
-            scene=scene,
+            scene=scene["scene"],
+            premise=scene["premise"],
             transcript=convo,
             name=ch.name,
-            grounding=_GROUNDING if i == 0 else "",
+            beat=scene["beats"][i],
+            grounding=_GROUNDING if i == 0 and not narrated else "",
             hint=_INTERACTION_HINTS.get(key, ""),
+            closing=_CLOSING if i == len(turns) - 1 else "",
         )
         raw = llm.generate(
             [{"role": "user", "content": prompt}],

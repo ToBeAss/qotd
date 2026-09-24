@@ -9,7 +9,8 @@
 # context (recent quotes, overused-word avoidance), not from sampling.
 llm:
   model: "gpt-6-sol"
-  #interaction_model: "gpt-5.4"   # optional: stronger model for the rare interactions
+  #interaction_model: "gpt-6-sol" # optional: a different model for interactions only;
+                                  # unset = the main model above
   #reasoning_effort: "medium"
   #temperature: 1.1
 
@@ -26,7 +27,12 @@ cover_after_days: 3
 
 # Chance per day that the cast runs an interaction instead of posting a quote.
 # Kept low so it stays special. ~0.07 ≈ once every two weeks.
-interaction_chance: 0.07
+interaction_chance: 0.15   # temporary eval value (Sep 2026); B2's pity timer replaces the flat roll
+
+# Chance an interaction is built from the cast's recent posts (the material block:
+# each character's last two posts) rather than a fresh office situation. Either
+# way the director sees the material; this decides whether it's the premise.
+scene_material_chance: 0.5
 
 # Optional narrator webhook. When set, the scene description is posted here before
 # an interaction's dialogue. Leave the env var blank to skip the narrator.

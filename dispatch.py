@@ -284,6 +284,9 @@ def _append_interaction_log(plan: dict, tz: ZoneInfo) -> None:
         "logged_at": datetime.now(tz).isoformat(timespec="seconds"),
         "date": plan["date"],
         "scene": plan.get("scene"),
+        "premise": plan.get("premise"),
+        "beats": plan.get("beats"),
+        "from_material": plan.get("from_material"),
         "medium": plan.get("medium"),
         "transcript": [
             {"character": e["character"], "line": e["line"]}
@@ -356,6 +359,9 @@ def play_interaction(plan: dict, path: Path, reg, mem: dict, now: datetime, tz: 
 
     if all(e.get("sent") for e in entries):
         _append_interaction_log(plan, tz)
+        if plan.get("premise"):  # older plans have none
+            memory.record_premise(mem, plan["date"], plan["premise"])
+            mem_changed = True
     return mem_changed
 
 

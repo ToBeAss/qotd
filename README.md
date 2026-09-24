@@ -7,7 +7,8 @@ conversations with each other. Runs on a Raspberry Pi Zero.
 It's deliberately more than a quote-poster: the characters have persistent memory
 (so they don't repeat themselves), schedule themselves by personality (the Plug
 owns weekends, the Postman skips them), and occasionally break the routine to talk
-to each other in short, narrated scenes.
+to each other in short, narrated scenes. Each scene has a premise (someone wants
+something small, something's in the way), often drawn from their recent posts.
 
 ## The cast
 
@@ -64,7 +65,7 @@ storyteller webhooks are optional. See `.env.example`.
 ```bash
 python preview.py quote                       # a real quote, printed
 python preview.py quote --persona plug --mode remix   # a remix of a bank quote
-python preview.py interaction --cast plug,dealer   # a full scene
+python preview.py interaction --cast plug,dealer   # a full scene, with its premise
 python preview.py pipeline --dry              # the whole pipeline, nothing sent
 ```
 
@@ -78,6 +79,6 @@ python preview.py pipeline --dry              # the whole pipeline, nothing sent
 ## Tuning
 
 Almost everything lives in `registry.yaml` — the model, posting weights per day
-and hour, quiet hours, interaction frequency, quote sources and cooldown, and
-location (for the dusk calculation). Each character's voice is a markdown file in `agents/`. Adding a
+and hour, quiet hours, interaction frequency and how often scenes build on recent
+posts, quote sources and cooldown, and location (for the dusk calculation). Each character's voice is a markdown file in `agents/`. Adding a
 character is one yaml block, one markdown file, and one webhook.

@@ -9,6 +9,8 @@ also get a structured record in recent_bank ({"quote_id", "framing"|"remix",
 "posted"}) so the LLM-authored part can be told apart from the bank quote, and
 spec-B cross-references can find quote ids. The top-level quote_usage
 ({quote_id: "YYYY-MM-DD"}) is shared across characters and drives the cooldown.
+The top-level recent_premises ([{"date", "premise"}], newest last) holds the
+premises of completed interactions so the director doesn't repeat itself.
 """
 
 from __future__ import annotations
@@ -24,6 +26,7 @@ STATE_DIR = Path(__file__).resolve().parent / "state"
 MEMORY_PATH = STATE_DIR / "memory.json"
 
 RECENT_QUOTES_CAP = 15
+RECENT_PREMISES_CAP = 10
 
 # Overused-word avoidance: a word in at least this many distinct recent posts is
 # flagged, up to this many words.
@@ -113,6 +116,19 @@ def overused_words(
 
 def quote_usage(mem: dict[str, Any]) -> dict[str, str]:
     return mem.get("quote_usage", {})
+
+
+def recent_premises(mem: dict[str, Any], n: int = 5) -> list[str]:
+    """The last n interaction premises, oldest first."""
+    return [p["premise"] for p in mem.get("recent_premises", [])[-n:] if p.get("premise")]
+
+
+def record_premise(mem: dict[str, Any], day: str, premise: str) -> dict[str, Any]:
+    """Record a completed interaction's premise (day is "YYYY-MM-DD")."""
+    rp = list(mem.get("recent_premises", []))
+    rp.append({"date": day, "premise": premise})
+    mem["recent_premises"] = rp[-RECENT_PREMISES_CAP:]
+    return mem
 
 
 def record_post(

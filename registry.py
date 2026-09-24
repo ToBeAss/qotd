@@ -67,6 +67,7 @@ class Registry:
     storyteller_webhook_env: str | None = None
     interaction_model: str | None = None   # optional stronger model for interactions
     interaction_chance: float = 0.07
+    scene_material_chance: float = 0.5
     quote_bank: Path | None = None
     quote_cooldown_days: int = 365
     cover_after_days: int = 3
@@ -141,6 +142,7 @@ def load_registry(path: Path = REGISTRY_PATH) -> Registry:
         storyteller_webhook_env=raw.get("storyteller_webhook_env"),
         interaction_model=llm_cfg.get("interaction_model"),
         interaction_chance=float(raw.get("interaction_chance", 0.07)),
+        scene_material_chance=float(raw.get("scene_material_chance", 0.5)),
         quote_bank=root / raw["quote_bank"] if raw.get("quote_bank") else None,
         quote_cooldown_days=int(raw.get("quote_cooldown_days", 365)),
         cover_after_days=int(raw.get("cover_after_days", 3)),
