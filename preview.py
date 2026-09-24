@@ -124,6 +124,9 @@ def cmd_interaction(args) -> None:
         eligible = [ch.key for ch in reg if ch.day_weight(now.weekday()) > 0]
         if len(eligible) < 2:
             eligible = [ch.key for ch in reg]  # ignore day rules for a forced preview
+    if args.closer and args.closer not in eligible:
+        print(f"[!] closer {args.closer!r} isn't in today's cast {eligible}")
+        return
 
     # The planner's own path: real memory for the material block and recent
     # premises, and the material roll unless --material / --no-material forces it.
@@ -131,12 +134,14 @@ def cmd_interaction(args) -> None:
     plan = planner.build_interaction_plan(
         reg, now.date(), now.tzinfo, random.Random(), eligible,
         planner._hhmm(reg.quiet_start), planner._hhmm(reg.quiet_end),
-        mem, from_material=args.material,
+        mem, from_material=args.material, closer=args.closer,
     )
 
     print(f"--- scene [{plan['medium']} / {plan['time_of_day']}] ---")
     print(f"premise:       {plan['premise']}")
     print(f"from_material: {plan['from_material']}")
+    print(f"seed:          {plan['seed']}")
+    print(f"closer:        {plan['closer']}")
     lines = [e for e in plan["entries"] if e["character"] != STORYTELLER_KEY]
     for e, beat in zip(lines, plan["beats"]):
         print(f"  beat ({e['character']}): {beat}")
@@ -145,7 +150,7 @@ def cmd_interaction(args) -> None:
         print(f"{reg[e['character']].name}: {e['line']}   (+{e['delay_after']}s)")
 
     if args.remember:
-        memory.record_premise(mem, plan["date"], plan["premise"])
+        memory.record_premise(mem, plan["date"], plan["premise"], plan["seed"], plan["closer"])
         memory.save(mem)
         print("\n[premise remembered — the director will avoid it next time]")
 
@@ -244,6 +249,7 @@ def main() -> None:
                    help="force a scene built from recent posts (default: the normal roll)")
     i.add_argument("--no-material", dest="material", action="store_false",
                    help="force a fresh office situation (material as background only)")
+    i.add_argument("--closer", help="force who speaks the last line (must be in the cast)")
     i.add_argument("--remember", action="store_true", help="record the premise to memory")
     i.set_defaults(func=cmd_interaction)
 

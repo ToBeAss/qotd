@@ -162,29 +162,45 @@ plan; dispatch only posts the lines, narrator first.
   must reference something concrete in the material. False → the material is
   background only and the director invents a fresh office situation. Stored on
   the plan as `from_material` (always false while there's no material yet).
+- **Structure is decided in code**, not by the model:
+  - **Seed**: `storyteller.SEEDS` holds the scene shapes (e.g. "someone wants a
+    favour and has to ask"). `pick_seed` chooses one the day's cast can play
+    (each seed lists the characters it needs; material-based seeds only on a
+    material roll) and not used in the last 3 scenes.
+  - **Closer**: `pick_closer` chooses who speaks last from the available cast,
+    never the previous scene's closer. `_validate_scene` rejects a scene whose
+    last turn isn't the closer.
 - **Schema**: the director returns `scene` (posted by the narrator), `premise`
   (one sentence, who wants what and what's in the way; not posted), `medium`,
-  `time_of_day`, `turns` and `beats` (one short intent per turn, same length;
-  the last one closes or deflates the premise). A parse or validation failure is
-  retried once, then raises, and the planner falls back to a normal day with an
-  admin report. `premise`, `beats` and `from_material` are frozen into the plan.
-- **Lines**: each speaker gets the premise and its own beat. The final speaker is
-  told to resolve or deflate the premise. `"..."` is allowed only when the beat
-  calls for silence (prompt rule, not a code check).
+  `time_of_day`, `turns` and `beats` (one per turn, same length; the last one
+  closes or deflates the premise). A beat says *what* the line accomplishes,
+  never *how* it's said or a physical action — physical business belongs in the
+  scene line. A parse or validation failure is retried once, then raises, and the
+  planner falls back to a normal day with an admin report. `premise`, `beats`,
+  `from_material`, `seed` and `closer` are frozen into the plan.
+- **Lines**: each speaker gets the premise and its own beat ("the beat is what
+  your line does; your voice decides how it sounds"). The final speaker is told
+  to resolve or deflate the premise. `"..."` is allowed only when the beat calls
+  for silence (prompt rule, not a code check). A line that narrates an action
+  (bracketed/starred, "I smooth…", "Takes off…") at its start or end is retried
+  once (`narrates_action`); if the retry still does, bracketed parts are stripped.
 - **Grounding**: the first speaker is told the audience can't see the scene
   (`_GROUNDING`) only when no narrator is configured (`STORYTELLER_WEBHOOK`
   blank). Decided at plan time from the environment. `preview.py pipeline --dry`
   fills a missing storyteller env with `"dry"` only after planning, so it plans
   with your real narrator setting.
-- **Recent premises**: after a complete playout, dispatch appends the premise to
-  `recent_premises` in memory (cap 10) and writes `premise`, `beats` and
-  `from_material` into `interactions.log`. The director is shown the last 5 and
-  told not to repeat them or their core joke.
+- **Recent premises**: after a complete playout, dispatch appends
+  `{date, premise, seed, closer}` to `recent_premises` in memory (cap 10) and
+  writes premise, beats, `from_material`, seed and closer into
+  `interactions.log`. The director is shown the last 5 premises and told not to
+  repeat them or their core joke; the seed and closer pickers read the same list.
+  Older entries without seed/closer still load.
 
 `preview.py interaction` runs the planner's path with real memory and prints the
-premise, `from_material` and the beats above the transcript. `--material` /
-`--no-material` force the roll; `--remember` records the premise (its only memory
-write); `--post` sends it.
+premise, `from_material`, seed, closer and the beats above the transcript.
+`--material` / `--no-material` force the roll, `--closer <key>` forces the closer;
+`--remember` records the scene to `recent_premises` (its only memory write);
+`--post` sends it.
 
 ## Quote Bank
 
@@ -246,9 +262,9 @@ exit on the held lock. Idle ticks are a cheap cold-start that finds nothing due.
   the posted text), `post_count`, and `recent_bank` (last 15 bank-based posts:
   `{quote_id, framing|remix, posted}`). Top level: `quote_usage`
   (`{quote_id: "YYYY-MM-DD"}`, shared across characters) and `recent_premises`
-  (last 10 completed interactions: `{date, premise}`, newest last).
+  (last 10 completed interactions: `{date, premise, seed, closer}`, newest last).
 - `state/interactions.log` — one JSON line per completed interaction: scene,
-  premise, beats, `from_material`, medium and transcript.
+  premise, beats, `from_material`, seed, closer, medium and transcript.
 - `state/admin_throttle.json` — rate-limit bookkeeping for admin error posts.
 
 ## Environment Variables

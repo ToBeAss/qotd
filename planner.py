@@ -348,19 +348,26 @@ def build_interaction_plan(
     qe: tuple[int, int],
     mem: dict | None = None,
     from_material: bool | None = None,
+    closer: str | None = None,
 ) -> dict:
     """Direct a scene, generate all lines sequentially, freeze them with delays.
     Raises on any failure so the caller can fall back to a normal plan.
-    `from_material` forces the material roll (preview); None rolls it."""
+    `from_material` and `closer` force those choices (preview); None rolls them."""
     mem = memory.load() if mem is None else mem
     material = storyteller.material_block(reg, mem)
     if from_material is None:
         from_material = rng.random() < reg.scene_material_chance
     from_material = from_material and bool(material)  # nothing to build from yet
 
+    recent = memory.recent_scenes(mem)
+    seed = storyteller.pick_seed(eligible, recent, rng, from_material)
+    closer = closer or storyteller.pick_closer(eligible, recent, rng)
+
     scene = storyteller.direct(
         eligible,
         today.strftime("%A"),
+        seed=seed,
+        closer=closer,
         material=material,
         from_material=from_material,
         recent_premises=memory.recent_premises(mem),
@@ -400,6 +407,8 @@ def build_interaction_plan(
         "premise": scene["premise"],
         "beats": scene["beats"],
         "from_material": from_material,
+        "seed": seed,
+        "closer": closer,
         "medium": scene["medium"],
         "time_of_day": scene["time_of_day"],
         "start_at": start_at.isoformat(),
