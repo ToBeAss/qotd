@@ -19,10 +19,14 @@ from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from dotenv import load_dotenv
+
 from registry import Registry, Character, STORYTELLER_KEY, load_registry
 import memory
 import obs
 import storyteller
+
+load_dotenv(override=True)  # cron has no env; override: dotenv cache can serve stale values
 
 STATE_DIR = Path(__file__).resolve().parent / "state"
 
@@ -243,6 +247,7 @@ def build_plan(reg: Registry, today: date, tz: ZoneInfo, rng: random.Random) -> 
                 obs.get_logger().warning(
                     "interaction planning failed, falling back to normal: %s", exc
                 )
+                obs.report_error(f"planner: interaction fell back to normal day: {exc}")
 
     chosen = select_characters(reg, weekday, mem, today, rng)
 

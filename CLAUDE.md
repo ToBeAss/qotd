@@ -141,6 +141,13 @@ exit on the held lock. Idle ticks are a cheap cold-start that finds nothing due.
 | `ADMIN_WEBHOOK` | Optional. Errors are posted here, rate-limited. Blank = log only. |
 | `STORYTELLER_WEBHOOK` | Optional narrator. Posts the scene before an interaction's dialogue. Blank = no scene message. |
 
+**Every cron entry point must call `load_dotenv(override=True)` at module top.**
+Cron provides no environment, so a script that skips it runs without
+`OPENAI_API_KEY` or `ADMIN_WEBHOOK` — failing, and unable to report that it
+failed. `planner.py`, `dispatch.py` and `preview.py` each do this themselves. When
+a fourth entry point arrives (e.g. the planned `announce.py`), that is the point
+to introduce a shared `config.py` instead of copying the call again.
+
 ## Logging
 
 `logs/qotd.log` — rotating, 512 KB × 3 backups. Full application log: generation

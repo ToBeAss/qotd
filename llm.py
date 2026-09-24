@@ -70,7 +70,10 @@ def generate(
     }
 
     resp = requests.post(OPENAI_URL, headers=headers, json=payload, timeout=timeout)
-    resp.raise_for_status()
+    if not resp.ok:
+        # Same HTTPError raise_for_status() would raise, but with OpenAI's error
+        # code in the message: 429 is both insufficient_quota and rate_limit_exceeded.
+        raise requests.HTTPError(_describe_error(resp), response=resp)
     return _extract_text(resp.json())
 
 
@@ -87,6 +90,17 @@ def generate_from_prompt(
         instructions=system_prompt,
         **kwargs,
     )
+
+
+def _describe_error(resp: requests.Response) -> str:
+    """'429 insufficient_quota: You exceeded...' from an OpenAI error body, or the
+    status plus a truncated raw body when it isn't the expected JSON."""
+    try:
+        err = resp.json()["error"]
+        code = err.get("code") or err.get("type") or "error"
+        return f"{resp.status_code} {code}: {str(err.get('message', ''))[:200]}"
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return f"{resp.status_code} {resp.reason}: {resp.text[:200]}"
 
 
 def _extract_text(data: dict[str, Any]) -> str:
