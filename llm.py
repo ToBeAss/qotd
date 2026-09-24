@@ -7,12 +7,22 @@ get_quote_of_the_day in main.py is replaced by generate_from_prompt here.
 from __future__ import annotations
 
 import json
+import logging
 import os
+import time
 from typing import Any
 
 import requests
 
 DEFAULT_MODEL = "gpt-5.4-mini"
+
+# A dropped connection or timeout (SSLError is a ConnectionError) is retried once
+# after this many seconds. HTTP errors (400, 429, ...) never are: a retry won't
+# fix a bad request or an empty quota. The planner has no per-minute retry and a
+# scene chains several calls, so one network blip shouldn't cost the day.
+NETWORK_RETRY_DELAY = 15.0
+
+log = logging.getLogger("qotd")
 OPENAI_URL = "https://api.openai.com/v1/responses"
 
 # Module defaults, settable from the registry via configure(). Kept here so call
@@ -78,7 +88,18 @@ def generate(
         "Content-Type": "application/json",
     }
 
-    resp = requests.post(OPENAI_URL, headers=headers, json=payload, timeout=timeout)
+    for attempt in (1, 2):
+        try:
+            resp = requests.post(OPENAI_URL, headers=headers, json=payload, timeout=timeout)
+            break
+        except (requests.ConnectionError, requests.Timeout) as exc:
+            if attempt == 2:
+                raise
+            log.warning(
+                "OpenAI request failed (%s: %s); retrying in %.0fs",
+                type(exc).__name__, exc, NETWORK_RETRY_DELAY,
+            )
+            time.sleep(NETWORK_RETRY_DELAY)
     if not resp.ok:
         # Same HTTPError raise_for_status() would raise, but with OpenAI's error
         # code in the message: 429 is both insufficient_quota and rate_limit_exceeded.

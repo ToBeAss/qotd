@@ -511,12 +511,16 @@ _INTERACTION_HINTS: dict[str, str] = {
 # The Dealer's hint is per line: the act by default, the slip on slip_turn.
 _DEALER_ACT = (
     " You're doing the bit: noir, clipped, low, a little too serious for the "
-    "moment. Commit to it; you think it's working."
+    "moment. Small things are deals, debts or secrets to you; a request comes out "
+    "as a favour you'll remember, a ruling as a verdict. Commit to it; you think "
+    "it's working."
 )
 _DEALER_SLIP = (
-    " On this line the act slips. For a moment you're just a plain, earnest, "
-    "slightly dorky guy who actually cares about this. Don't announce it; let the "
-    "line show it. You can scramble back into character at the end."
+    " On this line the act cracks for a moment: something small and a bit "
+    "embarrassing slips out in a plain, dorky voice (an honest reason, over-eager "
+    "excitement, admitting he wanted the thing). Then you catch yourself and pull "
+    "the act back on before the line ends. A crack, not a confession: no "
+    "apologies, no thank-yous, no talking about feelings."
 )
 
 

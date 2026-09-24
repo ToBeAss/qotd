@@ -59,6 +59,13 @@ toward `max_output_tokens`, so don't cap output with tokens — a cap makes the
 response come back `incomplete` with no text (`llm.py` raises an `LLMError`
 naming the reason). Control length through prompts and deterministic checks.
 
+`llm.generate` retries once, after 15s, on a network failure
+(`requests.ConnectionError`, which includes `SSLError`, or `requests.Timeout`),
+logging the first failure at WARNING. HTTP errors (400, 429, 5xx) and
+`incomplete` responses are never retried. In dispatch the retry happens inside a
+tick, so an entry still uses one of its `MAX_ATTEMPTS` per failed tick; a longer
+tick just makes the next ticks exit on the flock.
+
 ### Planner (`planner.py`)
 
 Runs at 07:00, before the 07:30 posting window opens. Pure decision, no network.
@@ -195,8 +202,10 @@ plan; dispatch only posts the lines, narrator first.
   yourself") and the Plug can drop the slang when something matters. The Dealer
   is the exception: his noir is a bit he keeps doing. Tone instructions alone
   swing him to one extreme or the other, so the mix is decided in code: every
-  Dealer line gets the ACT instruction except `slip_turn`, which gets SLIP (plain,
-  earnest, slightly dorky, then scrambling back into character).
+  Dealer line gets the ACT instruction (noir; small things are deals, debts or
+  secrets) except `slip_turn`, which gets SLIP: a brief, slightly embarrassing
+  crack in a plain voice, then the act back on before the line ends. A crack, not
+  a confession: no apologies, thanks or feelings talk.
 - **Lines**: each speaker gets the premise and its own beat ("the beat is what
   your line does; your voice decides how it sounds"). The first speaker is told
   nobody has spoken yet, so it can't answer objections nobody raised. The final
