@@ -512,7 +512,7 @@ _INTERACTION_HINTS: dict[str, str] = {
 _DEALER_ACT = (
     " You're doing the bit: noir, clipped, low, a little too serious for the "
     "moment. Small things are deals, debts or secrets to you; a request comes out "
-    "as a favour you'll remember, a ruling as a verdict. Commit to it; you think "
+    "like he's calling in a debt; a ruling like a verdict. Commit to it; you think "
     "it's working."
 )
 _DEALER_SLIP = (
@@ -520,7 +520,9 @@ _DEALER_SLIP = (
     "embarrassing slips out in a plain, dorky voice (an honest reason, over-eager "
     "excitement, admitting he wanted the thing). Then you catch yourself and pull "
     "the act back on before the line ends. A crack, not a confession: no "
-    "apologies, no thank-yous, no talking about feelings."
+    "apologies, no thank-yous, no talking about feelings. The last clause is back "
+    "in the act. The slip is about himself (what he wanted, why he did it), never "
+    "about their feelings or wellbeing."
 )
 
 
