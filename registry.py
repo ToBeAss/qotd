@@ -25,6 +25,9 @@ COMMON_PROMPT_PATH = REPO_ROOT / "agents" / "_common.md"
 # Sentinel character key for the narrator's scene line in an interaction plan.
 STORYTELLER_KEY = "_storyteller"
 
+# Where a character's quote comes from. Anything else falls back to "original".
+QUOTE_SOURCES = {"original", "bank", "remix"}
+
 
 @dataclass(frozen=True)
 class Location:
@@ -41,6 +44,8 @@ class Character:
     prompt: str                 # composed: voice + house rules
     day_weights: list[int]      # Mon..Sun, index 0 = Monday
     hours: dict[int, int]       # hour (0-23) -> base weight
+    quote_source: str = "original"   # original | bank | remix
+    remix_ratio: float = 0.0    # remix characters: share of posts that remix
 
     @property
     def webhook(self) -> str | None:
@@ -62,6 +67,9 @@ class Registry:
     storyteller_webhook_env: str | None = None
     interaction_model: str | None = None   # optional stronger model for interactions
     interaction_chance: float = 0.07
+    quote_bank: Path | None = None
+    quote_cooldown_days: int = 365
+    cover_after_days: int = 3
 
     @property
     def storyteller_webhook(self) -> str | None:
@@ -101,6 +109,9 @@ def load_registry(path: Path = REGISTRY_PATH) -> Registry:
             raise ValueError(
                 f"{key}: day_weights must have 7 entries (Mon..Sun), got {len(day_weights)}"
             )
+        source = c.get("quote_source", "original")
+        if source not in QUOTE_SOURCES:
+            source = "original"
         characters[key] = Character(
             key=key,
             name=c["name"],
@@ -108,13 +119,19 @@ def load_registry(path: Path = REGISTRY_PATH) -> Registry:
             prompt=_compose_prompt(voice, common),
             day_weights=day_weights,
             hours={int(h): int(w) for h, w in c["hours"].items()},
+            quote_source=source,
+            remix_ratio=float(c.get("remix_ratio", 0.0)),
         )
 
     loc = raw["location"]
     qh = raw["quiet_hours"]
 
     llm_cfg = raw.get("llm", {})
-    llm.configure(model=llm_cfg.get("model"), temperature=llm_cfg.get("temperature"))
+    llm.configure(
+        model=llm_cfg.get("model"),
+        temperature=llm_cfg.get("temperature"),
+        reasoning_effort=llm_cfg.get("reasoning_effort"),
+    )
 
     return Registry(
         location=Location(lat=loc["lat"], lon=loc["lon"], timezone=loc["timezone"]),
@@ -124,6 +141,9 @@ def load_registry(path: Path = REGISTRY_PATH) -> Registry:
         storyteller_webhook_env=raw.get("storyteller_webhook_env"),
         interaction_model=llm_cfg.get("interaction_model"),
         interaction_chance=float(raw.get("interaction_chance", 0.07)),
+        quote_bank=root / raw["quote_bank"] if raw.get("quote_bank") else None,
+        quote_cooldown_days=int(raw.get("quote_cooldown_days", 365)),
+        cover_after_days=int(raw.get("cover_after_days", 3)),
     )
 
 
@@ -136,6 +156,6 @@ if __name__ == "__main__":
         env_state = "set" if ch.webhook else f"UNSET ({ch.webhook_env})"
         print(
             f"  {ch.key:8} {ch.name:18} webhook={env_state} "
-            f"days={ch.day_weights} hours={sorted(ch.hours)}"
+            f"days={ch.day_weights} hours={sorted(ch.hours)} source={ch.quote_source}"
         )
         print(f"           prompt: {len(ch.prompt)} chars")

@@ -6,6 +6,9 @@ actually send to Discord. Examples:
   python preview.py quote                 # a real Dealer quote, printed
   python preview.py quote --persona plug  # force a persona
   python preview.py quote --persona postman --post   # and send it
+  python preview.py quote --persona plug --mode remix --quote-id seneca-brevity-01
+  python preview.py quote --persona postman --dealer-absent   # allow covering
+  python preview.py quote --model gpt-5.4-mini --effort low   # A/B a model
 
   python preview.py interaction           # direct + generate a full scene, printed
   python preview.py interaction --post --fast   # post it, skip the real delays
@@ -37,6 +40,7 @@ import dispatch
 import llm
 import memory
 import planner
+import quotes
 import storyteller
 from registry import load_registry
 
@@ -50,6 +54,7 @@ def _now(reg):
 # --- quote --------------------------------------------------------------------
 def cmd_quote(args) -> None:
     reg = load_registry()
+    llm.configure(model=args.model, reasoning_effort=args.effort)
     key = args.persona or "dealer"
     ch = reg[key]
     now = _now(reg)
@@ -63,14 +68,35 @@ def cmd_quote(args) -> None:
         "days_since_last": memory.days_since_last(mem, key, now.date()),
         "hour_unusual": False,
     }
-    block = dispatch.render_context_block(facts, memory.recent_quotes(mem, key))
+    # Same entry the planner would write, then any forced overrides.
+    entry = {"character": key, "facts": facts}
+    planner.assign_quotes(reg, [entry], mem, now.date(), random.Random())
+    if args.mode:
+        entry["mode"] = args.mode
+        if args.mode == "original":
+            entry.pop("quote_id", None)
+    if args.quote_id:
+        entry["quote_id"] = args.quote_id
+        if not args.mode:  # an explicit quote means this character's bank mode
+            entry["mode"] = "remix" if ch.quote_source == "remix" else "bank"
+    if entry.get("mode") in ("bank", "remix") and not entry.get("quote_id"):
+        bank = quotes.load_bank(reg.quote_bank)
+        if bank:
+            entry["quote_id"] = quotes.select(
+                bank, memory.quote_usage(mem), now.date(), reg.quote_cooldown_days, random.Random()
+            ).id
 
-    print(f"--- {ch.name} ---")
-    quote = llm.generate_from_prompt(ch.prompt, block)
+    print(f"--- {ch.name} [{entry.get('mode', 'original')}"
+          f"{' ' + entry['quote_id'] if entry.get('quote_id') else ''}] ---")
+    quote, bank_record = dispatch.generate_post(
+        entry, ch, reg, mem, now, absent=True if args.dealer_absent else None
+    )
     print(quote)
 
     if args.remember:
         memory.record_post(mem, key, quote, now)
+        if bank_record:
+            memory.record_bank_post(mem, key, bank_record, quote, now)
         memory.save(mem)
         print("\n[remembered — run again to see anti-repetition push off this]")
 
@@ -186,7 +212,12 @@ def main() -> None:
     q = sub.add_parser("quote", help="generate one quote")
     q.add_argument("--persona", choices=["dealer", "plug", "postman"])
     q.add_argument("--post", action="store_true", help="send to Discord")
-    q.add_argument("--remember", action="store_true", help="record to memory (watch anti-repetition across runs)")
+    q.add_argument("--remember", action="store_true", help="record to memory, incl. quote_usage (watch anti-repetition across runs)")
+    q.add_argument("--quote-id", help="use this bank quote (bank/remix modes)")
+    q.add_argument("--mode", choices=["remix", "original"], help="force the Plug's mode")
+    q.add_argument("--dealer-absent", action="store_true", help="force the Dealer-absent flag on")
+    q.add_argument("--model", help="override the registry model for this run")
+    q.add_argument("--effort", help="override reasoning effort for this run (e.g. low, high)")
     q.set_defaults(func=cmd_quote)
 
     i = sub.add_parser("interaction", help="direct + generate a full scene")

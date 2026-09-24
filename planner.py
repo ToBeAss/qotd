@@ -2,8 +2,10 @@
 
 Decides the whole day: who posts, at what (random) time inside their own
 dusk-aware distribution and the global quiet window, and freezes the context
-facts each post will riff on. Writes state/plan-YYYY-MM-DD.json. Generates no
-quote text and contacts nothing — pure decision. Dispatch does the talking.
+facts each post will riff on. For bank-sourced characters it also picks the
+quote (quote_id) and, for remixers, the mode. Writes state/plan-YYYY-MM-DD.json.
+Generates no quote text and contacts nothing — pure decision. Dispatch does the
+talking.
 
 The plan is owned by the planning day even when a post fires after midnight: an
 hour-0 entry gets a fire_at on the following calendar date but lives in today's
@@ -24,6 +26,7 @@ from dotenv import load_dotenv
 from registry import Registry, Character, STORYTELLER_KEY, load_registry
 import memory
 import obs
+import quotes
 import storyteller
 
 load_dotenv(override=True)  # cron has no env; override: dotenv cache can serve stale values
@@ -229,6 +232,43 @@ def freeze_facts(
     }
 
 
+# --- Quote source -------------------------------------------------------------
+def quote_mode(ch: Character, rng: random.Random) -> str:
+    """original | bank | remix. A remixer rolls remix_ratio; the rest of the time
+    he writes his own."""
+    if ch.quote_source == "remix":
+        return "remix" if rng.random() < ch.remix_ratio else "original"
+    return ch.quote_source
+
+
+def assign_quotes(
+    reg: Registry, entries: list[dict], mem: dict, today: date, rng: random.Random
+) -> None:
+    """Stamp `mode` (and `quote_id` for bank/remix) onto each entry of a
+    bank-sourced character. Quotes are distinct within the plan. Usage is only
+    recorded by dispatch on a successful post. With no usable bank the entry falls
+    back to original mode (load_bank has already reported why)."""
+    bank: dict[str, quotes.Quote] | None = None
+    taken: set[str] = set()
+    for e in entries:
+        ch = reg[e["character"]]
+        if ch.quote_source == "original":
+            continue
+        mode = quote_mode(ch, rng)
+        if mode != "original":
+            if bank is None:
+                bank = quotes.load_bank(reg.quote_bank) or {}
+            if bank:
+                q = quotes.select(
+                    bank, memory.quote_usage(mem), today, reg.quote_cooldown_days, rng, taken
+                )
+                taken.add(q.id)
+                e["quote_id"] = q.id
+            else:
+                mode = "original"
+        e["mode"] = mode
+
+
 # --- Build --------------------------------------------------------------------
 def build_plan(reg: Registry, today: date, tz: ZoneInfo, rng: random.Random) -> dict:
     mem = memory.load()
@@ -266,6 +306,8 @@ def build_plan(reg: Registry, today: date, tz: ZoneInfo, rng: random.Random) -> 
             "facts": freeze_facts(ch, fire_at, hour, sunset, rare, mem, today),
         })
 
+    # After timing, so the quote draw doesn't shift a seeded schedule.
+    assign_quotes(reg, entries, mem, today, rng)
     entries.sort(key=lambda e: e["fire_at"])
     return {
         "date": today.isoformat(),
@@ -405,6 +447,7 @@ def main() -> None:
         summary = ", ".join(
             f"{e['character']}@{e['fire_at'][11:16]}"
             + ("!" if e["facts"]["hour_unusual"] else "")
+            + (f"[{e['mode']}]" if "mode" in e else "")
             for e in plan["entries"]
         ) or "(no posts)"
     print(f"[planner] {today} ({plan['weekday']}): {summary}")

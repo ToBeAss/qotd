@@ -102,7 +102,6 @@ def direct(available: list[str], weekday_name: str, *, model: str | None = None)
         [{"role": "user", "content": f"{note}\n\nSet today's scene."}],
         instructions=_DIRECTOR_PROMPT,
         model=model,
-        max_output_tokens=400,
     )
     scene = _parse_scene(raw)
     _validate_scene(scene, available)
@@ -202,7 +201,6 @@ def generate_lines(
             [{"role": "user", "content": prompt}],
             instructions=ch.prompt,
             model=model,
-            max_output_tokens=200,
         )
         line = _clean_line(raw, ch.name)
         transcript.append((key, line))

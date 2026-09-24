@@ -11,12 +11,16 @@ to each other in short, narrated scenes.
 
 ## The cast
 
-- **The Quote Dealer** — noir, spare, the canonical voice. Posts in the evenings,
-  tracking actual dusk.
-- **The Quote Plug** — chronically online, brainrot, covers when the Dealer's off.
-  Never before noon; lives for the weekend.
-- **The Quote Postman** — plain, honest, observational. Working hours only, never
-  on weekends.
+- **The Quote Dealer** — noir, spare, the canonical voice. Writes his own quotes.
+  Posts in the evenings, tracking actual dusk.
+- **The Quote Plug** — chronically online, brainrot, grindset. Mostly remixes a
+  real quote into his register; sometimes writes his own. Never before noon; lives
+  for the weekend.
+- **The Quote Postman** — plain, honest, observational. Delivers a real quote with
+  a dry one-line delivery note. Working hours only, never on weekends.
+
+The Plug and Postman only joke about covering for the Dealer once he's actually
+been quiet for a few days (`cover_after_days`).
 
 ## How it works
 
@@ -31,8 +35,17 @@ planner.py  (07:00)        → state/plan-YYYY-MM-DD.json
 dispatch.py (every minute) → reads the plan, generates, posts to Discord
 ```
 
-Quotes come from the OpenAI API; posts go out through Discord webhooks (one per
+Text comes from the OpenAI API; posts go out through Discord webhooks (one per
 character). No other external services.
+
+### The quote bank
+
+Real quotes live in `data/quotes.jsonl` (`id`, `text`, `author`, optional
+`source`). Code inserts the quote and its attribution — the model never writes a
+real quote from memory. New candidates go in `data/quotes.candidates.jsonl`;
+moving a line into `quotes.jsonl` is the review. A quote isn't reused by anyone
+for `quote_cooldown_days` (365). Each character is also told which words it has
+leaned on lately, so it can steer away from them.
 
 ## Setup
 
@@ -50,6 +63,7 @@ storyteller webhooks are optional. See `.env.example`.
 
 ```bash
 python preview.py quote                       # a real quote, printed
+python preview.py quote --persona plug --mode remix   # a remix of a bank quote
 python preview.py interaction --cast plug,dealer   # a full scene
 python preview.py pipeline --dry              # the whole pipeline, nothing sent
 ```
@@ -64,6 +78,6 @@ python preview.py pipeline --dry              # the whole pipeline, nothing sent
 ## Tuning
 
 Almost everything lives in `registry.yaml` — the model, posting weights per day
-and hour, quiet hours, interaction frequency, and location (for the dusk
-calculation). Each character's voice is a markdown file in `agents/`. Adding a
+and hour, quiet hours, interaction frequency, quote sources and cooldown, and
+location (for the dusk calculation). Each character's voice is a markdown file in `agents/`. Adding a
 character is one yaml block, one markdown file, and one webhook.

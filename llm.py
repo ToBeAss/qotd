@@ -17,14 +17,21 @@ OPENAI_URL = "https://api.openai.com/v1/responses"
 
 # Module defaults, settable from the registry via configure(). Kept here so call
 # sites don't all need to thread model/temperature through.
-_DEFAULTS: dict[str, Any] = {"model": DEFAULT_MODEL, "temperature": None}
+_DEFAULTS: dict[str, Any] = {"model": DEFAULT_MODEL, "temperature": None, "reasoning_effort": None}
 
 
-def configure(*, model: str | None = None, temperature: float | None = None) -> None:
+def configure(
+    *,
+    model: str | None = None,
+    temperature: float | None = None,
+    reasoning_effort: str | None = None,
+) -> None:
     if model:
         _DEFAULTS["model"] = model
     if temperature is not None:
         _DEFAULTS["temperature"] = temperature
+    if reasoning_effort:
+        _DEFAULTS["reasoning_effort"] = reasoning_effort
 
 
 class LLMError(RuntimeError):
@@ -61,6 +68,8 @@ def generate(
         payload["max_output_tokens"] = max_output_tokens
     if reasoning:
         payload["reasoning"] = reasoning
+    elif _DEFAULTS["reasoning_effort"]:
+        payload["reasoning"] = {"effort": _DEFAULTS["reasoning_effort"]}
     if temp is not None:
         payload["temperature"] = temp
 
@@ -74,7 +83,13 @@ def generate(
         # Same HTTPError raise_for_status() would raise, but with OpenAI's error
         # code in the message: 429 is both insufficient_quota and rate_limit_exceeded.
         raise requests.HTTPError(_describe_error(resp), response=resp)
-    return _extract_text(resp.json())
+    data = resp.json()
+    # Reasoning models count reasoning toward max_output_tokens, so a response can
+    # finish "incomplete" with no text at all. Name it rather than "no text found".
+    if data.get("status") == "incomplete":
+        reason = (data.get("incomplete_details") or {}).get("reason", "unknown")
+        raise LLMError(f"response incomplete ({reason}) from {model}")
+    return _extract_text(data)
 
 
 def generate_from_prompt(

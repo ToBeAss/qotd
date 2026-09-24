@@ -2,13 +2,27 @@
 # Identity, webhook mapping, scheduling weights, and location all live here.
 # Adding a character means: one block below + one new agents/<key>.md + one env var.
 
-# Model config. model is the single source of truth; temperature is optional —
-# raise it (e.g. 1.1–1.3) for more variety. Some reasoning models reject the
-# temperature parameter; if you get an API error, comment it back out.
+# Model config. model is the single source of truth.
+# reasoning_effort is optional (e.g. "low", "medium", "high"); unset means the
+# model's own default. temperature is only for older, non-reasoning models:
+# reasoning models (GPT-6) reject it with a 400. Variety comes from the prompt
+# context (recent quotes, overused-word avoidance), not from sampling.
 llm:
-  model: "gpt-5.4-mini"
+  model: "gpt-6-sol"
   #interaction_model: "gpt-5.4"   # optional: stronger model for the rare interactions
-  temperature: 1.1
+  #reasoning_effort: "medium"
+  #temperature: 1.1
+
+# Quote bank: real quotes with genuine attribution, one JSON object per line. Code
+# inserts the text and attribution; the LLM never writes a real quote from memory.
+# New candidates go to data/quotes.candidates.jsonl; moving them here is the review.
+quote_bank: "data/quotes.jsonl"
+# A bank quote isn't reused (by any character) within this many days.
+quote_cooldown_days: 365
+
+# The Plug and Postman may mention covering for the Dealer only once he's been
+# quiet this many days. Before that, they post as themselves.
+cover_after_days: 3
 
 # Chance per day that the cast runs an interaction instead of posting a quote.
 # Kept low so it stays special. ~0.07 ≈ once every two weeks.
@@ -36,6 +50,9 @@ characters:
     name: "The Quote Dealer"
     prompt_file: "agents/dealer.md"
     webhook_env: "DEALER_WEBHOOK"
+    # original: writes his own quote. bank: delivers a bank quote (LLM writes only
+    # the delivery line). remix: remixes a bank quote, remix_ratio of the time.
+    quote_source: original
     # Mon Tue Wed Thu Fri Sat Sun — flat, with the slight overall favour he gets
     # as the canonical voice plus a small weekend lift.
     day_weights: [44, 42, 42, 42, 44, 46, 46]
@@ -62,6 +79,8 @@ characters:
     name: "The Quote Plug"
     prompt_file: "agents/plug.md"
     webhook_env: "PLUG_WEBHOOK"
+    quote_source: remix
+    remix_ratio: 0.7        # remainder: his own original
     # Hates Mondays, builds toward the weekend.
     day_weights: [12, 18, 20, 22, 30, 55, 52]
     # Hard zero before noon — Gen Z does not do mornings. Evening/night weighted,
@@ -85,6 +104,7 @@ characters:
     name: "The Quote Postman"
     prompt_file: "agents/postman.md"
     webhook_env: "POSTMAN_WEBHOOK"
+    quote_source: bank
     # Loves Mondays, fades through the week, hard zero on the weekend (0 = never).
     day_weights: [42, 32, 32, 30, 28, 0, 0]
     # Working hours only, front-loaded. The taper to 16 is the "sorry I'm late,
