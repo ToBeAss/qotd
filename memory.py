@@ -9,9 +9,10 @@ also get a structured record in recent_bank ({"quote_id", "framing"|"remix",
 "posted"}) so the LLM-authored part can be told apart from the bank quote, and
 spec-B cross-references can find quote ids. The top-level quote_usage
 ({quote_id: "YYYY-MM-DD"}) is shared across characters and drives the cooldown.
-The top-level recent_premises ([{"date", "premise", "seed", "closer"}], newest
-last) holds completed interactions so the director doesn't repeat a premise and
-code doesn't repeat a seed or closer. Older entries have no seed/closer.
+The top-level recent_premises ([{"date", "premise", "seed", "closer", "medium",
+"time_of_day", "slip_turn"}], newest last) holds completed interactions so the director
+doesn't repeat a premise and code doesn't repeat a seed, closer or setting.
+Older entries lack some of these keys.
 """
 
 from __future__ import annotations
@@ -130,19 +131,14 @@ def recent_scenes(mem: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def record_premise(
-    mem: dict[str, Any],
-    day: str,
-    premise: str,
-    seed: str | None = None,
-    closer: str | None = None,
+    mem: dict[str, Any], day: str, premise: str, **details: str | None
 ) -> dict[str, Any]:
-    """Record a completed interaction (day is "YYYY-MM-DD")."""
+    """Record a completed interaction (day is "YYYY-MM-DD"). `details` are the
+    structure choices (seed, closer, medium, time_of_day, slip_turn); missing
+    ones are left out, as in entries written before they existed."""
     rp = list(mem.get("recent_premises", []))
     entry = {"date": day, "premise": premise}
-    if seed:
-        entry["seed"] = seed
-    if closer:
-        entry["closer"] = closer
+    entry.update({k: v for k, v in details.items() if v is not None and v != ""})
     rp.append(entry)
     mem["recent_premises"] = rp[-RECENT_PREMISES_CAP:]
     return mem

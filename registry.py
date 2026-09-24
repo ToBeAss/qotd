@@ -11,7 +11,7 @@ Retires the old system_prompt.py.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
@@ -27,6 +27,13 @@ STORYTELLER_KEY = "_storyteller"
 
 # Where a character's quote comes from. Anything else falls back to "original".
 QUOTE_SOURCES = {"original", "bank", "remix"}
+
+# Interaction setting defaults, used when registry.yaml omits them.
+DEFAULT_MEDIUM_WEIGHTS = {"irl": 0.65, "messaging": 0.35}
+DEFAULT_TIME_WEIGHTS = {
+    "irl": {"morning": 3, "lunch": 3, "afternoon": 3, "evening": 2},
+    "messaging": {"morning": 1, "lunch": 1, "afternoon": 1, "evening": 3, "night": 4},
+}
 
 
 @dataclass(frozen=True)
@@ -68,6 +75,11 @@ class Registry:
     interaction_model: str | None = None   # optional stronger model for interactions
     interaction_chance: float = 0.07
     scene_material_chance: float = 0.5
+    dealer_slip_chance: float = 0.5
+    scene_medium_weights: dict[str, float] = field(default_factory=lambda: dict(DEFAULT_MEDIUM_WEIGHTS))
+    scene_time_weights: dict[str, dict[str, float]] = field(
+        default_factory=lambda: {m: dict(t) for m, t in DEFAULT_TIME_WEIGHTS.items()}
+    )
     quote_bank: Path | None = None
     quote_cooldown_days: int = 365
     cover_after_days: int = 3
@@ -143,6 +155,14 @@ def load_registry(path: Path = REGISTRY_PATH) -> Registry:
         interaction_model=llm_cfg.get("interaction_model"),
         interaction_chance=float(raw.get("interaction_chance", 0.07)),
         scene_material_chance=float(raw.get("scene_material_chance", 0.5)),
+        dealer_slip_chance=float(raw.get("dealer_slip_chance", 0.5)),
+        scene_medium_weights={
+            m: float(w) for m, w in (raw.get("scene_medium_weights") or DEFAULT_MEDIUM_WEIGHTS).items()
+        },
+        scene_time_weights={
+            m: {t: float(w) for t, w in times.items()}
+            for m, times in (raw.get("scene_time_weights") or DEFAULT_TIME_WEIGHTS).items()
+        },
         quote_bank=root / raw["quote_bank"] if raw.get("quote_bank") else None,
         quote_cooldown_days=int(raw.get("quote_cooldown_days", 365)),
         cover_after_days=int(raw.get("cover_after_days", 3)),

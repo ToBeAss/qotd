@@ -170,6 +170,18 @@ plan; dispatch only posts the lines, narrator first.
   - **Closer**: `pick_closer` chooses who speaks last from the available cast,
     never the previous scene's closer. `_validate_scene` rejects a scene whose
     last turn isn't the closer.
+  - **Setting**: `pick_setting` rolls the medium (`scene_medium_weights`,
+    irl 0.65 / messaging 0.35) within the seed's allowed media, then the time of
+    day from that medium's `scene_time_weights` (irl has no night; the group
+    chat leans evening/night). It never repeats the previous scene's exact
+    (medium, time) pair, and only offers times whose `INTERACTION_WINDOWS` hours
+    fall inside the quiet window (`planner.interaction_times`). The director is
+    told the setting; `_validate_scene` enforces it. Time of day then sets the
+    start hour.
+  - **Dealer slip**: when the Dealer is in the cast, the planner rolls
+    `dealer_slip_chance` (0.5). On a slip the director must give him 2+ turns and
+    return `slip_turn`, one of his turns after his first (`_validate_scene`
+    enforces it). Without a slip, `slip_turn` is null.
 - **Schema**: the director returns `scene` (posted by the narrator), `premise`
   (one sentence, who wants what and what's in the way; not posted), `medium`,
   `time_of_day`, `turns` and `beats` (one per turn, same length; the last one
@@ -178,9 +190,17 @@ plan; dispatch only posts the lines, narrator first.
   scene line. A parse or validation failure is retried once, then raises, and the
   planner falls back to a normal day with an admin report. `premise`, `beats`,
   `from_material`, `seed` and `closer` are frozen into the plan.
+- **Backstage**: the quote channel is each character's performance; scenes are
+  backstage, where the Plug and Postman talk as themselves ("Sound like
+  yourself") and the Plug can drop the slang when something matters. The Dealer
+  is the exception: his noir is a bit he keeps doing. Tone instructions alone
+  swing him to one extreme or the other, so the mix is decided in code: every
+  Dealer line gets the ACT instruction except `slip_turn`, which gets SLIP (plain,
+  earnest, slightly dorky, then scrambling back into character).
 - **Lines**: each speaker gets the premise and its own beat ("the beat is what
-  your line does; your voice decides how it sounds"). The final speaker is told
-  to resolve or deflate the premise. `"..."` is allowed only when the beat calls
+  your line does; your voice decides how it sounds"). The first speaker is told
+  nobody has spoken yet, so it can't answer objections nobody raised. The final
+  speaker is told to resolve or deflate the premise. `"..."` is allowed only when the beat calls
   for silence (prompt rule, not a code check). A line that narrates an action
   (bracketed/starred, "I smooth…", "Takes off…") at its start or end is retried
   once (`narrates_action`); if the retry still does, bracketed parts are stripped.
@@ -190,15 +210,18 @@ plan; dispatch only posts the lines, narrator first.
   fills a missing storyteller env with `"dry"` only after planning, so it plans
   with your real narrator setting.
 - **Recent premises**: after a complete playout, dispatch appends
-  `{date, premise, seed, closer}` to `recent_premises` in memory (cap 10) and
-  writes premise, beats, `from_material`, seed and closer into
-  `interactions.log`. The director is shown the last 5 premises and told not to
-  repeat them or their core joke; the seed and closer pickers read the same list.
-  Older entries without seed/closer still load.
+  `{date, premise, seed, closer, medium, time_of_day, slip_turn}` to
+  `recent_premises` in memory (cap 10) and writes premise, beats,
+  `from_material`, seed, closer and `slip_turn` into `interactions.log`. The director is shown the last 5 premises and told not
+  to repeat them or their core joke; the seed, closer and setting pickers read
+  the same list. Older entries missing any of these keys still load.
 
 `preview.py interaction` runs the planner's path with real memory and prints the
-premise, `from_material`, seed, closer and the beats above the transcript.
-`--material` / `--no-material` force the roll, `--closer <key>` forces the closer;
+premise, `from_material`, seed, closer, `slip_turn` and the beats above the
+transcript.
+`--material` / `--no-material` force the roll, `--closer <key>` forces the closer,
+`--medium irl|messaging` and `--time <label>` force the setting, `--slip` /
+`--no-slip` force the Dealer slip roll;
 `--remember` records the scene to `recent_premises` (its only memory write);
 `--post` sends it.
 
@@ -262,9 +285,11 @@ exit on the held lock. Idle ticks are a cheap cold-start that finds nothing due.
   the posted text), `post_count`, and `recent_bank` (last 15 bank-based posts:
   `{quote_id, framing|remix, posted}`). Top level: `quote_usage`
   (`{quote_id: "YYYY-MM-DD"}`, shared across characters) and `recent_premises`
-  (last 10 completed interactions: `{date, premise, seed, closer}`, newest last).
+  (last 10 completed interactions: `{date, premise, seed, closer, medium,
+  time_of_day, slip_turn}`, newest last).
 - `state/interactions.log` — one JSON line per completed interaction: scene,
-  premise, beats, `from_material`, seed, closer, medium and transcript.
+  premise, beats, `from_material`, seed, closer, `slip_turn`, medium and
+  transcript.
 - `state/admin_throttle.json` — rate-limit bookkeeping for admin error posts.
 
 ## Environment Variables

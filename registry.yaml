@@ -34,6 +34,22 @@ interaction_chance: 0.15   # temporary eval value (Sep 2026); B2's pity timer re
 # way the director sees the material; this decides whether it's the premise.
 scene_material_chance: 0.5
 
+# Chance, when the Dealer is in a scene, that his noir act slips on one of his
+# lines (he gets 2+ turns; the slip is never his first). Otherwise he stays in
+# the act throughout. Decided in code; the director is told.
+dealer_slip_chance: 0.5
+
+# Where and when a scene happens, rolled in code (the director is told, not
+# asked). Medium first, then time of day from that medium's weights. irl has no
+# night; the group chat leans late. The previous scene's exact (medium, time)
+# pair isn't repeated. Time of day also sets the start hour (planner windows).
+scene_medium_weights:
+  irl: 0.65
+  messaging: 0.35
+scene_time_weights:
+  irl:       {morning: 3, lunch: 3, afternoon: 3, evening: 2}
+  messaging: {morning: 1, lunch: 1, afternoon: 1, evening: 3, night: 4}
+
 # Optional narrator webhook. When set, the scene description is posted here before
 # an interaction's dialogue. Leave the env var blank to skip the narrator.
 storyteller_webhook_env: "STORYTELLER_WEBHOOK"

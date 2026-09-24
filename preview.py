@@ -124,6 +124,9 @@ def cmd_interaction(args) -> None:
         eligible = [ch.key for ch in reg if ch.day_weight(now.weekday()) > 0]
         if len(eligible) < 2:
             eligible = [ch.key for ch in reg]  # ignore day rules for a forced preview
+    if args.slip and storyteller.DEALER not in eligible:
+        print(f"[!] --slip needs the Dealer in today's cast {eligible}")
+        return
     if args.closer and args.closer not in eligible:
         print(f"[!] closer {args.closer!r} isn't in today's cast {eligible}")
         return
@@ -135,6 +138,7 @@ def cmd_interaction(args) -> None:
         reg, now.date(), now.tzinfo, random.Random(), eligible,
         planner._hhmm(reg.quiet_start), planner._hhmm(reg.quiet_end),
         mem, from_material=args.material, closer=args.closer,
+        medium=args.medium, time_of_day=args.time, slip=args.slip,
     )
 
     print(f"--- scene [{plan['medium']} / {plan['time_of_day']}] ---")
@@ -142,6 +146,7 @@ def cmd_interaction(args) -> None:
     print(f"from_material: {plan['from_material']}")
     print(f"seed:          {plan['seed']}")
     print(f"closer:        {plan['closer']}")
+    print(f"slip_turn:     {plan['slip_turn']}")
     lines = [e for e in plan["entries"] if e["character"] != STORYTELLER_KEY]
     for e, beat in zip(lines, plan["beats"]):
         print(f"  beat ({e['character']}): {beat}")
@@ -150,7 +155,10 @@ def cmd_interaction(args) -> None:
         print(f"{reg[e['character']].name}: {e['line']}   (+{e['delay_after']}s)")
 
     if args.remember:
-        memory.record_premise(mem, plan["date"], plan["premise"], plan["seed"], plan["closer"])
+        memory.record_premise(
+            mem, plan["date"], plan["premise"], seed=plan["seed"], closer=plan["closer"],
+            medium=plan["medium"], time_of_day=plan["time_of_day"], slip_turn=plan["slip_turn"],
+        )
         memory.save(mem)
         print("\n[premise remembered — the director will avoid it next time]")
 
@@ -250,6 +258,13 @@ def main() -> None:
     i.add_argument("--no-material", dest="material", action="store_false",
                    help="force a fresh office situation (material as background only)")
     i.add_argument("--closer", help="force who speaks the last line (must be in the cast)")
+    i.add_argument("--medium", choices=sorted(storyteller.MEDIA), help="force the medium")
+    i.add_argument("--slip", dest="slip", action="store_true", default=None,
+                   help="force a Dealer act slip (default: the normal roll)")
+    i.add_argument("--no-slip", dest="slip", action="store_false",
+                   help="keep the Dealer in his act throughout")
+    i.add_argument("--time", choices=["morning", "lunch", "afternoon", "evening", "night"],
+                   help="force the time of day")
     i.add_argument("--remember", action="store_true", help="record the premise to memory")
     i.set_defaults(func=cmd_interaction)
 

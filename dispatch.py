@@ -289,6 +289,7 @@ def _append_interaction_log(plan: dict, tz: ZoneInfo) -> None:
         "from_material": plan.get("from_material"),
         "seed": plan.get("seed"),
         "closer": plan.get("closer"),
+        "slip_turn": plan.get("slip_turn"),
         "medium": plan.get("medium"),
         "transcript": [
             {"character": e["character"], "line": e["line"]}
@@ -363,7 +364,10 @@ def play_interaction(plan: dict, path: Path, reg, mem: dict, now: datetime, tz: 
         _append_interaction_log(plan, tz)
         if plan.get("premise"):  # older plans have none
             memory.record_premise(
-                mem, plan["date"], plan["premise"], plan.get("seed"), plan.get("closer")
+                mem, plan["date"], plan["premise"],
+                seed=plan.get("seed"), closer=plan.get("closer"),
+                medium=plan.get("medium"), time_of_day=plan.get("time_of_day"),
+                slip_turn=plan.get("slip_turn"),
             )
             mem_changed = True
     return mem_changed

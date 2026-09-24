@@ -318,6 +318,15 @@ def build_plan(reg: Registry, today: date, tz: ZoneInfo, rng: random.Random) -> 
     }
 
 
+def interaction_times(qs: tuple[int, int], qe: tuple[int, int]) -> set[str]:
+    """Time-of-day labels whose window has at least one hour inside the quiet
+    window, so a rolled "night" can't silently start at noon."""
+    return {
+        label for label, (lo, hi) in INTERACTION_WINDOWS.items()
+        if any(hour_allowed(h, qs, qe) for h in range(lo, hi))
+    }
+
+
 def sample_interaction_start(
     time_of_day: str,
     today: date,
@@ -349,10 +358,14 @@ def build_interaction_plan(
     mem: dict | None = None,
     from_material: bool | None = None,
     closer: str | None = None,
+    medium: str | None = None,
+    time_of_day: str | None = None,
+    slip: bool | None = None,
 ) -> dict:
     """Direct a scene, generate all lines sequentially, freeze them with delays.
     Raises on any failure so the caller can fall back to a normal plan.
-    `from_material` and `closer` force those choices (preview); None rolls them."""
+    `from_material`, `closer`, `medium`, `time_of_day` and `slip` force those
+    choices (preview); None rolls them."""
     mem = memory.load() if mem is None else mem
     material = storyteller.material_block(reg, mem)
     if from_material is None:
@@ -362,12 +375,23 @@ def build_interaction_plan(
     recent = memory.recent_scenes(mem)
     seed = storyteller.pick_seed(eligible, recent, rng, from_material)
     closer = closer or storyteller.pick_closer(eligible, recent, rng)
+    medium, time_of_day = storyteller.pick_setting(
+        reg, seed, recent, rng, interaction_times(qs, qe),
+        medium=medium, time_of_day=time_of_day,
+    )
+    dealer_in = storyteller.DEALER in eligible
+    if slip is None:
+        slip = dealer_in and rng.random() < reg.dealer_slip_chance
+    slip = slip and dealer_in
 
     scene = storyteller.direct(
         eligible,
         today.strftime("%A"),
         seed=seed,
         closer=closer,
+        medium=medium,
+        time_of_day=time_of_day,
+        slip=slip,
         material=material,
         from_material=from_material,
         recent_premises=memory.recent_premises(mem),
@@ -409,6 +433,7 @@ def build_interaction_plan(
         "from_material": from_material,
         "seed": seed,
         "closer": closer,
+        "slip_turn": scene["slip_turn"],
         "medium": scene["medium"],
         "time_of_day": scene["time_of_day"],
         "start_at": start_at.isoformat(),

@@ -13,8 +13,11 @@ Two jobs, both at plan time:
 The director is handed material from memory (each character's last couple of
 posts) and the recent premises, so scenes can be about something real and don't
 repeat. Structure is decided in code, not left to the model: pick_seed() chooses
-the scene's seed (not one of the last few used) and pick_closer() who speaks last
-(not the previous scene's closer). Lines may be exactly "..." when a beat calls
+the scene's seed (not one of the last few used), pick_closer() who speaks last
+(not the previous scene's closer) and pick_setting() the medium and time of day
+(weighted, not the previous scene's exact pair). The planner also rolls whether
+the Dealer's act slips; the director picks which of his turns (slip_turn), and
+generate_lines gives his lines the ACT instruction except that one. Lines may be exactly "..." when a beat calls
 for silence; a line that narrates an action instead of speaking is retried once.
 """
 
@@ -58,6 +61,9 @@ SEED_COOLDOWN = 3
 
 log = logging.getLogger("qotd")
 
+# The Dealer's scenes run on his act (noir as a bit), with an optional slip.
+DEALER = "dealer"
+
 
 @dataclass(frozen=True)
 class Seed:
@@ -65,6 +71,7 @@ class Seed:
     needs: frozenset[str] = frozenset()   # cast keys that must be available
     min_cast: int = 2
     material: bool = False                # only when the scene builds on material
+    media: frozenset[str] = frozenset(MEDIA)   # media the seed can play in
 
 
 # The shape of a scene: code picks one per scene (see pick_seed). The director
@@ -120,6 +127,10 @@ Remixes real quotes into his own register.
 - postman: calm, plain, literal. Delivers real quotes with a dry note. The anchor \
 who undercuts: deadpan, and the one who says the fact that ends the argument.
 
+These scenes are backstage. Their posting voices are registers they perform in; \
+here they talk as themselves. The Dealer is the exception: his noir is a bit he \
+commits to. Whether it slips in this scene is decided for you (see below).
+
 Today there is no quote post: this scene replaces it. Never reference "today's \
 quote" or a quote being posted today. Their past posts are fair game.
 
@@ -131,7 +142,8 @@ scene-setting line the audience reads before the dialogue>",
   "medium": "irl" | "messaging",
   "time_of_day": "morning" | "lunch" | "afternoon" | "evening" | "night",
   "turns": ["<character key>", ...],
-  "beats": ["<intent for turn 1>", "<intent for turn 2>", ...]
+  "beats": ["<intent for turn 1>", "<intent for turn 2>", ...],
+  "slip_turn": <index into turns of the Dealer's slip, or null>
 }
 
 Rules:
@@ -153,15 +165,19 @@ on the letter"). Never HOW it's said ("flatly", "without a speech") — their \
 voices handle that — and never a physical action ("smooths the sign", "takes \
 off his glasses"). Physical business belongs in the scene line only. A beat may \
 call for silence ("says nothing") when silence is the point.
-- medium and time_of_day must FIT the scene: a lunch-room run-in is "irl" at \
-"lunch"; a late-night group chat is "messaging" at "night".
+- slip_turn: only when told the Dealer slips. Give the dealer at least two \
+turns, and set slip_turn to the 0-based index of one of his turns after his \
+first: the line where his act drops and he's briefly, plainly sincere. Write \
+that beat as what the line accomplishes, like any other. Otherwise null.
+- You're given the medium and time of day. Return them unchanged and make the \
+scene fit them: "irl" is face to face, "messaging" is the three of them in a \
+group chat, wherever they each are.
 - Home base is their workplace: the quote room / office. Most scenes happen \
 there — it's the recurring set, and that familiarity is the point. Vary what's \
 *happening* in the room rather than relocating every time. Venture out only \
 occasionally (a café run, the walk in).
 - Within the office, don't lean on equipment breaking (printers, toner, markers). \
 That's one situation among many and wears out fast.
-- Mix the medium: some scenes are just the three of them texting.
 - The Postman is a good anchor — include him when you can.
 """
 
@@ -244,6 +260,46 @@ def pick_closer(available: list[str], recent: list[dict], rng: random.Random) ->
     return rng.choice([k for k in available if k != previous] or list(available))
 
 
+def _weighted(weights: dict[str, float], rng: random.Random) -> str:
+    keys = list(weights)
+    return rng.choices(keys, weights=[weights[k] for k in keys], k=1)[0]
+
+
+def pick_setting(
+    reg: Registry,
+    seed: str,
+    recent: list[dict],
+    rng: random.Random,
+    allowed_times: set[str],
+    *,
+    medium: str | None = None,
+    time_of_day: str | None = None,
+) -> tuple[str, str]:
+    """Roll (medium, time_of_day): medium from scene_medium_weights within the
+    seed's media, then time from that medium's weights, limited to allowed_times
+    (labels with an hour inside the quiet window). The previous scene's exact
+    pair is avoided when anything else is possible. Either value can be forced."""
+    previous = (recent[-1].get("medium"), recent[-1].get("time_of_day")) if recent else None
+
+    if medium is None:
+        media = {
+            m: w for m, w in reg.scene_medium_weights.items()
+            if m in SEEDS[seed].media and w > 0
+        } or {m: 1.0 for m in SEEDS[seed].media}
+        medium = _weighted(media, rng)
+
+    if time_of_day is None:
+        times = {
+            t: w for t, w in reg.scene_time_weights.get(medium, {}).items()
+            if t in TIMES and t in allowed_times and w > 0
+        } or {t: 1.0 for t in sorted(allowed_times)}
+        if previous and previous[0] == medium and len(times) > 1:
+            times.pop(previous[1], None)
+        time_of_day = _weighted(times, rng)
+
+    return medium, time_of_day
+
+
 # --- Director -----------------------------------------------------------------
 def direct(
     available: list[str],
@@ -251,18 +307,25 @@ def direct(
     *,
     seed: str,
     closer: str,
+    medium: str,
+    time_of_day: str,
+    slip: bool = False,
     material: str = "",
     from_material: bool = False,
     recent_premises: list[str] | None = None,
     model: str | None = None,
 ) -> dict[str, Any]:
     """Ask the director for a scene built on `seed` (a SEEDS key) that `closer`
-    ends. Validates against the available cast and the closer; on a parse or
-    validation failure retries once, then raises StorytellerError."""
+    ends, set in `medium` at `time_of_day`. With `slip`, the Dealer gets 2+
+    turns and the scene names his slip_turn. Validates against the cast, closer,
+    setting and slip; on a parse or validation failure retries once, then raises
+    StorytellerError."""
     if len(available) < 2:
         raise StorytellerError(f"need >=2 available characters, got {available}")
     if closer not in available:
         raise StorytellerError(f"closer {closer!r} not in available cast {available}")
+    if slip and DEALER not in available:
+        raise StorytellerError("a Dealer slip needs the Dealer in the cast")
 
     parts = [
         f"Today is {weekday_name}. Available cast: {', '.join(available)}."
@@ -276,6 +339,14 @@ def direct(
         parts.append(f"Recent premises — do not repeat these premises or their core joke:\n{listed}")
     parts.append(f"This scene's seed: {SEEDS[seed].text}")
     parts.append(f"Closer: {closer}. {closer} speaks the final turn.")
+    parts.append(f'Setting: medium "{medium}", time_of_day "{time_of_day}".')
+    if slip:
+        parts.append(
+            "Dealer slip: yes. Give the dealer at least two turns and set slip_turn "
+            "to one of his turns after his first."
+        )
+    elif DEALER in available:
+        parts.append("Dealer slip: no. He stays in his act throughout; slip_turn is null.")
     parts.append("Set today's scene.")
     prompt = "\n\n".join(parts)
 
@@ -288,7 +359,7 @@ def direct(
         )
         try:
             scene = _parse_scene(raw)
-            _validate_scene(scene, available, closer)
+            _validate_scene(scene, available, closer, medium, time_of_day, slip)
             return scene
         except StorytellerError:
             if attempt == 2:
@@ -310,7 +381,14 @@ def _parse_scene(raw: str) -> dict[str, Any]:
         raise StorytellerError(f"director JSON parse failed: {exc}: {raw[:200]}")
 
 
-def _validate_scene(scene: dict[str, Any], available: list[str], closer: str) -> None:
+def _validate_scene(
+    scene: dict[str, Any],
+    available: list[str],
+    closer: str,
+    medium: str,
+    time_of_day: str,
+    slip: bool = False,
+) -> None:
     for field in ("scene", "premise", "medium", "time_of_day", "turns", "beats"):
         if field not in scene:
             raise StorytellerError(f"scene missing '{field}'")
@@ -318,6 +396,10 @@ def _validate_scene(scene: dict[str, Any], available: list[str], closer: str) ->
         raise StorytellerError(f"bad medium: {scene['medium']}")
     if scene["time_of_day"] not in TIMES:
         raise StorytellerError(f"bad time_of_day: {scene['time_of_day']}")
+    if (scene["medium"], scene["time_of_day"]) != (medium, time_of_day):
+        raise StorytellerError(
+            f"setting must be {medium}/{time_of_day}, got {scene['medium']}/{scene['time_of_day']}"
+        )
     premise = scene["premise"]
     if not isinstance(premise, str) or not premise.strip() or len(premise) > PREMISE_MAX:
         raise StorytellerError(f"premise must be a non-empty sentence: {premise!r:.100}")
@@ -337,13 +419,25 @@ def _validate_scene(scene: dict[str, Any], available: list[str], closer: str) ->
         or not all(isinstance(b, str) and b.strip() for b in beats)
     ):
         raise StorytellerError(f"beats must be {len(turns)} non-empty strings: {beats}")
+    if not slip:
+        scene["slip_turn"] = None  # code decides; ignore a stray index
+        return
+    st = scene.get("slip_turn")
+    if (
+        not isinstance(st, int) or isinstance(st, bool)
+        or not 0 <= st < len(turns)
+        or turns[st] != DEALER
+        or DEALER not in turns[:st]
+    ):
+        raise StorytellerError(f"slip_turn must be a Dealer turn after his first: {st!r} in {turns}")
 
 
 # --- Lines --------------------------------------------------------------------
 _TURN_TEMPLATE = """You're in a live {medium_desc} with the others. This is NOT a \
 quote delivery — your usual output format and "deliver a quote" rules do not apply \
-here. Just talk, in your established voice. There's no quote post today, so don't \
-bring up "today's quote".
+here. This is backstage. Your posting voice is a register you perform in, not \
+how you talk all the time.{yourself} There's no quote post today, so don't bring \
+up "today's quote".
 
 Scene: {scene}
 What's going on: {premise}
@@ -356,7 +450,7 @@ It's your turn ({name}). Your job this line: {beat}
 Reply with a single line in character, one or two sentences. Be specific to \
 what's going on and say it the way you'd actually say it. The beat is what your \
 line does; your voice decides how it sounds.\
-{grounding}{hint}{closing}{retry} Reply with exactly "..." only if your job this line \
+{opening}{grounding}{hint}{closing}{retry} Reply with exactly "..." only if your job this line \
 calls for silence. Output only your line, as spoken: no name prefix, no \
 stage directions or actions in brackets, no surrounding quotation marks, no \
 markdown."""
@@ -368,6 +462,11 @@ _GROUNDING = (
     "messages. So let your line quietly reveal the situation through how you react "
     "to it (what's happening, roughly where), without narrating or stating the "
     "obvious to someone standing right there."
+)
+
+_OPENING = (
+    " Nobody has said anything yet. Don't respond to objections or answers that "
+    "haven't been voiced."
 )
 
 _CLOSING = (
@@ -402,12 +501,29 @@ _INTERACTION_HINTS: dict[str, str] = {
         "lands: it's the fact that settles the argument or deflates it, never a "
         "neutral acknowledgement. You don't philosophise."
     ),
-    "dealer": (
-        " Stay noir and theatrical even when conceding. The concession is the "
-        "performance. One line, but it's your line."
+    "plug": (
+        " You're the live-commentator: reactive, quick, online. The slang is how "
+        "you talk, not a rule: drop it when something actually matters."
     ),
-    "plug": " You're the live-commentator: reactive, quick, terminally online.",
 }
+
+
+# The Dealer's hint is per line: the act by default, the slip on slip_turn.
+_DEALER_ACT = (
+    " You're doing the bit: noir, clipped, low, a little too serious for the "
+    "moment. Commit to it; you think it's working."
+)
+_DEALER_SLIP = (
+    " On this line the act slips. For a moment you're just a plain, earnest, "
+    "slightly dorky guy who actually cares about this. Don't announce it; let the "
+    "line show it. You can scramble back into character at the end."
+)
+
+
+def _hint(key: str, i: int, slip_turn: int | None) -> str:
+    if key == DEALER:
+        return _DEALER_SLIP if i == slip_turn else _DEALER_ACT
+    return _INTERACTION_HINTS.get(key, "")
 
 
 def generate_lines(
@@ -432,8 +548,10 @@ def generate_lines(
                 transcript=convo,
                 name=ch.name,
                 beat=scene["beats"][i],
+                yourself="" if key == DEALER else " Sound like yourself.",
+                opening=_OPENING if i == 0 else "",
                 grounding=_GROUNDING if i == 0 and not narrated else "",
-                hint=_INTERACTION_HINTS.get(key, ""),
+                hint=_hint(key, i, scene.get("slip_turn")),
                 closing=_CLOSING if i == len(turns) - 1 else "",
                 retry=_RETRY_SPOKEN if attempt == 2 else "",
             )
