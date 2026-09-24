@@ -67,8 +67,3 @@ Almost everything lives in `registry.yaml` — the model, posting weights per da
 and hour, quiet hours, interaction frequency, and location (for the dusk
 calculation). Each character's voice is a markdown file in `agents/`. Adding a
 character is one yaml block, one markdown file, and one webhook.
-
-## More
-
-- `CLAUDE.md` — architecture notes and working guidance.
-- `HANDOVER.md` — full design rationale, every decision, and the deferred roadmap.
